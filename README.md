@@ -393,7 +393,12 @@ Exit codes are recorded in the run manifest and are visible when inspecting hist
 
 ### Example Scripts
 
-An example automation script is available in the repository under [`examples/automations/`](examples/automations/). It demonstrates all three parameter source types: `hmkv_output` (encoded output directory), `prompt` (destination media directory), and `static` (group name).
+Example automation scripts are available in the repository under [`examples/automations/`](examples/automations/):
+
+- [`move-media`](examples/automations/move-media.md) demonstrates all three parameter source types: `hmkv_output` (encoded output directory), `prompt` (destination media directory), and `static` (group name).
+- [`ha-notify-eject`](examples/automations/ha-notify-eject.md) notifies Home Assistant through a webhook and then ejects the disc. It comes as a PowerShell script for Windows and a shell script for Linux/macOS.
+
+On Windows, run a PowerShell script with a command like `powershell -NoProfile -ExecutionPolicy Bypass -File C:\path\to\script.ps1` (HandyMKV runs commands through `cmd /c`, so use a path without spaces).
 
 ## Multi-Disc Support
 
