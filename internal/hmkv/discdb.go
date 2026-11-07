@@ -540,6 +540,7 @@ func ApplyDiscDBMatch(titles []TitleInfo, match DiscDBMatch) int {
 		titles[i].DiscDBType = ""
 		titles[i].DiscDBFileName = ""
 		titles[i].DiscDBShortName = ""
+		titles[i].discDBTitleIndex = -1
 
 		dt := matchDiscDBTitle(&titles[i], match.Disc.Titles)
 		if dt == nil || dt.Item == nil || strings.TrimSpace(dt.Item.Title) == "" {
@@ -548,6 +549,7 @@ func ApplyDiscDBMatch(titles []TitleInfo, match DiscDBMatch) int {
 
 		titles[i].DiscDBName = discDBDisplayName(match, dt.Item)
 		titles[i].DiscDBType = dt.Item.Type
+		titles[i].discDBTitleIndex = dt.Index
 		titles[i].DiscDBShortName = discDBShortName(match, dt.Item)
 
 		base := sanitizeFileName(discDBBaseName(match, dt.Item))
@@ -567,6 +569,34 @@ func ApplyDiscDBMatch(titles []TitleInfo, match DiscDBMatch) int {
 	}
 
 	return named
+}
+
+// IsDiscDBMainContent reports whether TheDiscDB identified the title as main content: the main
+// movie of a movie disc or an episode of a series disc.
+func (t *TitleInfo) IsDiscDBMainContent() bool {
+	return strings.EqualFold(t.DiscDBType, "MainMovie") || strings.EqualFold(t.DiscDBType, "Episode")
+}
+
+// SelectDiscDBMainContent returns the titles that TheDiscDB identified as main movie or episode,
+// in disc order. If several MakeMKV titles match the same TheDiscDB title (e.g. the same
+// playlist listed twice), only the first one is returned, so nothing is ripped twice.
+// The result is empty if the disc was not identified or contains no main content.
+func SelectDiscDBMainContent(titles []TitleInfo) []TitleInfo {
+	selected := make([]TitleInfo, 0)
+	seen := make(map[int]struct{})
+
+	for _, t := range titles {
+		if !t.IsDiscDBMainContent() {
+			continue
+		}
+		if _, dup := seen[t.discDBTitleIndex]; dup {
+			continue
+		}
+		seen[t.discDBTitleIndex] = struct{}{}
+		selected = append(selected, t)
+	}
+
+	return selected
 }
 
 func formatSeasonEpisode(season, episode string) string {

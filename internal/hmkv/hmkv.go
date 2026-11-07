@@ -15,7 +15,10 @@ import (
 // Executes the main functionality of the program.
 // Reads the configuration file, reads titles from the disc, prompts the user for which titles they want to rip,
 // and processes the selected titles.
-func Exec(mkv *MakeMKV, hb *HandBrakeCLI, discIds []int, appVersion string, automationNames []string) error {
+//
+// If autoSelect is set, the titles that TheDiscDB identifies as main movie or episode are selected
+// without asking. If TheDiscDB does not know the disc (or is disabled), the user is asked as usual.
+func Exec(mkv *MakeMKV, hb *HandBrakeCLI, discIds []int, appVersion string, automationNames []string, autoSelect bool) error {
 	config, err := ReadConfig()
 
 	if err != nil {
@@ -65,50 +68,21 @@ func Exec(mkv *MakeMKV, hb *HandBrakeCLI, discIds []int, appVersion string, auto
 			fmt.Println(formatTitleLine(&title))
 		}
 
-		var titleSelections string
+		var selected []TitleInfo
 
-		// Prompt the user for input
-		fmt.Print("\nEnter the IDs of the titles to process (0,1,2...) or enter 'all' to process all titles: \n\n")
-		titleSelections = readLine()
-
-		// Remove invalid characters
-		titleSelections = strings.ReplaceAll(titleSelections, " ", "")
-		titleSelections = strings.Trim(titleSelections, ",")
-		titleSelections = strings.ReplaceAll(titleSelections, "(", "")
-		titleSelections = strings.ReplaceAll(titleSelections, ")", "")
-
-		if titleSelections == "" {
-			fmt.Printf("No title selections detected. Exiting.\n\n")
-			return nil
+		if autoSelect {
+			selected = autoSelectTitles(titles, discDB != nil)
 		}
 
-		// If the user entered 'all', don't filter the titles
-		if titleSelections != "all" {
-			rawIds := strings.Split(titleSelections, ",")
-			selectedIds := make([]int, 0)
-
-			for _, rawIds := range rawIds {
-				id, err := strconv.Atoi(rawIds)
-
-				if err != nil {
-					fmt.Printf("\nInvalid title selection input detected.\n\n")
-					return nil
-				}
-
-				selectedIds = append(selectedIds, id)
-			}
-
-			if len(selectedIds) < 1 {
-				fmt.Printf("\nNo selected titles detected.\n\n")
+		if selected == nil {
+			var ok bool
+			selected, ok = promptForTitleSelection(titles)
+			if !ok {
 				return nil
 			}
-
-			titles = slices.DeleteFunc(titles, func(x TitleInfo) bool {
-				return !slices.Contains(selectedIds, x.Index)
-			})
 		}
 
-		processTitles = append(processTitles, titles...)
+		processTitles = append(processTitles, selected...)
 
 		if i < len(discIds)-1 {
 			fmt.Println()
@@ -453,6 +427,78 @@ func ripTitles(
 		encChannel <- newEncodingParams(config, &title, mkvOutputPath,
 			filepath.Join(hbOutputDir, encodingOutputFileName), rippedSizeBytes, ripDuration)
 	}
+}
+
+// autoSelectTitles selects the main movie or the episodes of a disc as identified by TheDiscDB.
+// It returns nil (after printing a warning) if nothing could be selected automatically, so the
+// caller falls back to the manual selection.
+func autoSelectTitles(titles []TitleInfo, discDBEnabled bool) []TitleInfo {
+	if !discDBEnabled {
+		fmt.Printf("\nWarning: automatic title selection needs TheDiscDB, but the lookup is disabled in the configuration (disable_thediscdb). Please select the titles manually.\n")
+		return nil
+	}
+
+	selected := SelectDiscDBMainContent(titles)
+
+	if len(selected) == 0 {
+		fmt.Printf("\nWarning: TheDiscDB did not identify a main movie or episodes on this disc. Please select the titles manually.\n")
+		return nil
+	}
+
+	ids := make([]string, 0, len(selected))
+	for _, t := range selected {
+		ids = append(ids, strconv.Itoa(t.Index))
+	}
+
+	fmt.Printf("\nAutomatically selected titles (TheDiscDB main movie/episodes): %s\n", strings.Join(ids, ","))
+
+	return selected
+}
+
+// promptForTitleSelection asks the user which titles to process. It returns false if the
+// input was empty or invalid and the program should exit.
+func promptForTitleSelection(titles []TitleInfo) ([]TitleInfo, bool) {
+	// Prompt the user for input
+	fmt.Print("\nEnter the IDs of the titles to process (0,1,2...) or enter 'all' to process all titles: \n\n")
+	titleSelections := readLine()
+
+	// Remove invalid characters
+	titleSelections = strings.ReplaceAll(titleSelections, " ", "")
+	titleSelections = strings.Trim(titleSelections, ",")
+	titleSelections = strings.ReplaceAll(titleSelections, "(", "")
+	titleSelections = strings.ReplaceAll(titleSelections, ")", "")
+
+	if titleSelections == "" {
+		fmt.Printf("No title selections detected. Exiting.\n\n")
+		return nil, false
+	}
+
+	// If the user entered 'all', don't filter the titles
+	if titleSelections == "all" {
+		return titles, true
+	}
+
+	selectedIds := make([]int, 0)
+
+	for _, rawId := range strings.Split(titleSelections, ",") {
+		id, err := strconv.Atoi(rawId)
+
+		if err != nil {
+			fmt.Printf("\nInvalid title selection input detected.\n\n")
+			return nil, false
+		}
+
+		selectedIds = append(selectedIds, id)
+	}
+
+	if len(selectedIds) < 1 {
+		fmt.Printf("\nNo selected titles detected.\n\n")
+		return nil, false
+	}
+
+	return slices.DeleteFunc(titles, func(x TitleInfo) bool {
+		return !slices.Contains(selectedIds, x.Index)
+	}), true
 }
 
 // Formats one line of the title selection list.
