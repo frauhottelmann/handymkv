@@ -8,6 +8,7 @@ import (
 	"os/user"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -37,6 +38,19 @@ type handyMKVConfig struct {
 	DisableDiscDB bool `json:"disable_thediscdb,omitempty"`
 	// Optional API key for TheDiscDB, sent as "Authorization: ApiKey <key>".
 	DiscDBAPIKey string `json:"thediscdb_api_key,omitempty"`
+	// Selects the titles automatically from TheDiscDB instead of asking (same as the -auto flag).
+	AutoSelectTitles bool `json:"auto_select_titles,omitempty"`
+	// The TheDiscDB title types selected automatically. Empty means DefaultAutoSelectTypes.
+	AutoSelectTypes []string `json:"auto_select_types,omitempty"`
+}
+
+// EffectiveAutoSelectTypes returns the configured title types for the automatic selection, or
+// the default (main movie and episodes) if none are configured.
+func (config *handyMKVConfig) EffectiveAutoSelectTypes() []string {
+	if len(config.AutoSelectTypes) > 0 {
+		return config.AutoSelectTypes
+	}
+	return DefaultAutoSelectTypes
 }
 
 func (config *handyMKVConfig) String() string {
@@ -88,6 +102,8 @@ func (config *handyMKVConfig) String() string {
 		fmt.Fprintf(&sb, "Manifest Directory:                 %s\n", config.ManifestDirectory)
 	}
 	fmt.Fprintf(&sb, "TheDiscDB Title Lookup:             %t\n", !config.DisableDiscDB)
+	fmt.Fprintf(&sb, "Auto Select Titles (TheDiscDB):     %t\n", config.AutoSelectTitles)
+	fmt.Fprintf(&sb, "Auto Select Title Types:            %s\n", strings.Join(config.EffectiveAutoSelectTypes(), ", "))
 
 	return sb.String()
 }
@@ -165,6 +181,12 @@ func readConfigFile(filePath string) (*handyMKVConfig, error) {
 	if err := validateExtraHandBrakeArgs(cfg.EncodeConfig.ExtraHandBrakeArgs); err != nil {
 		return nil, fmt.Errorf("error validating config file - %w", err)
 	}
+
+	autoSelectTypes, err := ParseDiscDBTitleTypes(cfg.AutoSelectTypes)
+	if err != nil {
+		return nil, fmt.Errorf("error validating config file (auto_select_types) - %w", err)
+	}
+	cfg.AutoSelectTypes = autoSelectTypes
 
 	if cfg.EncodeConfig.PresetFile != "" {
 		presetFile, err := readPresetFile(cfg.EncodeConfig.PresetFile)
@@ -477,5 +499,51 @@ func promptForConfig(hb *HandBrakeCLI, configLocationSelection int) (*handyMKVCo
 		clear()
 	}
 
+	config.AutoSelectTitles = promptForBool(
+		"Select the titles to rip automatically using TheDiscDB?",
+		"If enabled, handymkv does not ask which titles to rip. Instead it selects all titles that TheDiscDB identifies as one of the chosen types (e.g. the main movie or the episodes). If the disc is not in TheDiscDB, you are asked as usual. This can be overridden per run with -auto=false or -auto.",
+		false,
+	)
+	clear()
+
+	if config.AutoSelectTitles {
+		config.AutoSelectTypes = promptForDiscDBTitleTypes()
+		clear()
+	}
+
 	return &config, nil
+}
+
+// promptForDiscDBTitleTypes asks which TheDiscDB title types are selected automatically.
+func promptForDiscDBTitleTypes() []string {
+	fmt.Printf("Which TheDiscDB title types should be selected automatically?\n\n")
+
+	for i, t := range DiscDBTitleTypes {
+		fmt.Printf("%d. %s\n", i+1, t)
+	}
+
+	fmt.Printf("\nProvide a comma delimited list of numbers or names. Example: 1,2,3\n\n")
+	fmt.Printf("Default: %s\n\n", strings.Join(DefaultAutoSelectTypes, ","))
+
+	for {
+		input := strings.TrimSpace(readLine())
+		fmt.Println()
+
+		if input == "" {
+			return slices.Clone(DefaultAutoSelectTypes)
+		}
+
+		types, err := ParseDiscDBTitleTypes(strings.Split(input, ","))
+		if err != nil {
+			fmt.Printf("%v\n\n", err)
+			continue
+		}
+
+		if len(types) == 0 {
+			fmt.Printf("Please select at least one type.\n\n")
+			continue
+		}
+
+		return types
+	}
 }

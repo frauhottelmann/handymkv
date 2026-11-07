@@ -299,7 +299,7 @@ func TestSelectDiscDBMainContentSeries(t *testing.T) {
 	}
 	ApplyDiscDBMatch(titles, sampleMatch())
 
-	got := SelectDiscDBMainContent(titles)
+	got := SelectDiscDBTitlesByType(titles, DefaultAutoSelectTypes)
 	var ids []int
 	for _, ti := range got {
 		ids = append(ids, ti.Index)
@@ -328,7 +328,7 @@ func TestSelectDiscDBMainContentMovieSkipsDuplicates(t *testing.T) {
 	}
 	ApplyDiscDBMatch(titles, match)
 
-	got := SelectDiscDBMainContent(titles)
+	got := SelectDiscDBTitlesByType(titles, DefaultAutoSelectTypes)
 	if len(got) != 1 || got[0].Index != 1 {
 		t.Fatalf("selected = %+v, want only title 1", got)
 	}
@@ -339,13 +339,91 @@ func TestSelectDiscDBMainContentMovieSkipsDuplicates(t *testing.T) {
 
 func TestSelectDiscDBMainContentUnknownDisc(t *testing.T) {
 	titles := []TitleInfo{{Index: 0, FileName: "a.mkv"}, {Index: 1, FileName: "b.mkv"}}
-	if got := SelectDiscDBMainContent(titles); len(got) != 0 {
+	if got := SelectDiscDBTitlesByType(titles, DefaultAutoSelectTypes); len(got) != 0 {
 		t.Errorf("selected = %+v, want none", got)
 	}
-	if got := autoSelectTitles(titles, true); got != nil {
+	if got := autoSelectTitles(titles, true, DefaultAutoSelectTypes); got != nil {
 		t.Errorf("autoSelectTitles = %+v, want nil (fallback to manual selection)", got)
 	}
-	if got := autoSelectTitles(titles, false); got != nil {
+	if got := autoSelectTitles(titles, false, DefaultAutoSelectTypes); got != nil {
 		t.Errorf("autoSelectTitles = %+v, want nil when TheDiscDB is disabled", got)
+	}
+}
+
+func TestSelectDiscDBTitlesByConfiguredTypes(t *testing.T) {
+	titles := []TitleInfo{
+		{Index: 0, FileName: "title_t00.mkv", SourceFile: "00800.mpls", SegmentMap: "3,4", FileSizeBytes: 3000},
+		{Index: 1, FileName: "title_t01.mkv", SourceFile: "00801.mpls", FileSizeBytes: 2000},
+		{Index: 3, FileName: "title_t03.mkv", SourceFile: "00900.mpls", FileSizeBytes: 500},
+		{Index: 4, FileName: "title_t04.mkv", SourceFile: "00901.mpls", FileSizeBytes: 400},
+	}
+	ApplyDiscDBMatch(titles, sampleMatch())
+
+	ids := func(sel []TitleInfo) []int {
+		var r []int
+		for _, ti := range sel {
+			r = append(r, ti.Index)
+		}
+		return r
+	}
+
+	if got := ids(SelectDiscDBTitlesByType(titles, []string{"extra"})); !slices.Equal(got, []int{3}) {
+		t.Errorf("Extra only: selected = %v, want [3]", got)
+	}
+	if got := ids(SelectDiscDBTitlesByType(titles, []string{"Episode", "Extra"})); !slices.Equal(got, []int{0, 1, 3}) {
+		t.Errorf("Episode+Extra: selected = %v, want [0 1 3]", got)
+	}
+	if got := SelectDiscDBTitlesByType(titles, []string{"Trailer"}); len(got) != 0 {
+		t.Errorf("Trailer: selected = %v, want none", ids(got))
+	}
+}
+
+func TestParseDiscDBTitleTypes(t *testing.T) {
+	got, err := ParseDiscDBTitleTypes([]string{" mainmovie", "2", "", "Episode", "deletedscene"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"MainMovie", "Episode", "DeletedScene"}; !slices.Equal(got, want) {
+		t.Errorf("got %v, want %v", got, want)
+	}
+
+	for _, bad := range []string{"Movie", "0", "12"} {
+		if _, err := ParseDiscDBTitleTypes([]string{bad}); err == nil {
+			t.Errorf("expected an error for %q", bad)
+		}
+	}
+}
+
+func TestConfigAutoSelectTypes(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+
+	if err := os.WriteFile(path, []byte(`{"auto_select_titles": true, "auto_select_types": ["episode", "Extra"]}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := readConfigFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.AutoSelectTitles || !slices.Equal(cfg.EffectiveAutoSelectTypes(), []string{"Episode", "Extra"}) {
+		t.Errorf("got %v %v", cfg.AutoSelectTitles, cfg.EffectiveAutoSelectTypes())
+	}
+
+	if err := os.WriteFile(path, []byte(`{}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err = readConfigFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.AutoSelectTitles || !slices.Equal(cfg.EffectiveAutoSelectTypes(), DefaultAutoSelectTypes) {
+		t.Errorf("defaults: got %v %v", cfg.AutoSelectTitles, cfg.EffectiveAutoSelectTypes())
+	}
+
+	if err := os.WriteFile(path, []byte(`{"auto_select_types": ["Movie"]}`), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readConfigFile(path); err == nil {
+		t.Error("expected an error for an unknown type")
 	}
 }

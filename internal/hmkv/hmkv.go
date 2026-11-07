@@ -16,9 +16,11 @@ import (
 // Reads the configuration file, reads titles from the disc, prompts the user for which titles they want to rip,
 // and processes the selected titles.
 //
-// If autoSelect is set, the titles that TheDiscDB identifies as main movie or episode are selected
-// without asking. If TheDiscDB does not know the disc (or is disabled), the user is asked as usual.
-func Exec(mkv *MakeMKV, hb *HandBrakeCLI, discIds []int, appVersion string, automationNames []string, autoSelect bool) error {
+// If the automatic selection is enabled, the titles that TheDiscDB identifies as one of the
+// configured types (default: main movie and episodes) are selected without asking. If TheDiscDB
+// does not know the disc (or is disabled), the user is asked as usual. autoSelectOverride (the
+// -auto flag) takes precedence over auto_select_titles in the configuration; nil means not set.
+func Exec(mkv *MakeMKV, hb *HandBrakeCLI, discIds []int, appVersion string, automationNames []string, autoSelectOverride *bool) error {
 	config, err := ReadConfig()
 
 	if err != nil {
@@ -43,6 +45,11 @@ func Exec(mkv *MakeMKV, hb *HandBrakeCLI, discIds []int, appVersion string, auto
 	}
 
 	processTitles := make([]TitleInfo, 0)
+
+	autoSelect := config.AutoSelectTitles
+	if autoSelectOverride != nil {
+		autoSelect = *autoSelectOverride
+	}
 
 	var discDB *DiscDBClient
 
@@ -71,7 +78,7 @@ func Exec(mkv *MakeMKV, hb *HandBrakeCLI, discIds []int, appVersion string, auto
 		var selected []TitleInfo
 
 		if autoSelect {
-			selected = autoSelectTitles(titles, discDB != nil)
+			selected = autoSelectTitles(titles, discDB != nil, config.EffectiveAutoSelectTypes())
 		}
 
 		if selected == nil {
@@ -429,19 +436,20 @@ func ripTitles(
 	}
 }
 
-// autoSelectTitles selects the main movie or the episodes of a disc as identified by TheDiscDB.
-// It returns nil (after printing a warning) if nothing could be selected automatically, so the
-// caller falls back to the manual selection.
-func autoSelectTitles(titles []TitleInfo, discDBEnabled bool) []TitleInfo {
+// autoSelectTitles selects the titles of a disc that TheDiscDB identifies as one of the given
+// types (e.g. MainMovie, Episode). It returns nil (after printing a warning) if nothing could be
+// selected automatically, so the caller falls back to the manual selection.
+func autoSelectTitles(titles []TitleInfo, discDBEnabled bool, types []string) []TitleInfo {
 	if !discDBEnabled {
 		fmt.Printf("\nWarning: automatic title selection needs TheDiscDB, but the lookup is disabled in the configuration (disable_thediscdb). Please select the titles manually.\n")
 		return nil
 	}
 
-	selected := SelectDiscDBMainContent(titles)
+	typeList := strings.Join(types, ", ")
+	selected := SelectDiscDBTitlesByType(titles, types)
 
 	if len(selected) == 0 {
-		fmt.Printf("\nWarning: TheDiscDB did not identify a main movie or episodes on this disc. Please select the titles manually.\n")
+		fmt.Printf("\nWarning: TheDiscDB did not identify any titles of the types %s on this disc. Please select the titles manually.\n", typeList)
 		return nil
 	}
 
@@ -450,7 +458,7 @@ func autoSelectTitles(titles []TitleInfo, discDBEnabled bool) []TitleInfo {
 		ids = append(ids, strconv.Itoa(t.Index))
 	}
 
-	fmt.Printf("\nAutomatically selected titles (TheDiscDB main movie/episodes): %s\n", strings.Join(ids, ","))
+	fmt.Printf("\nAutomatically selected titles (TheDiscDB types %s): %s\n", typeList, strings.Join(ids, ","))
 
 	return selected
 }

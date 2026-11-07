@@ -196,7 +196,7 @@ func main() {
 
 	flag.BoolVar(&version, "v", false, "Version. Prints the version of the application.")
 	flag.StringVar(&discIds, "d", "0", "Discs. A comma delimited list of disc indexes to rip. Example: -d 0,1,2")
-	flag.BoolVar(&autoSelect, "auto", false, "Auto select. Rips the titles that TheDiscDB identifies as main movie (movies) or episodes (series) without asking. Falls back to the manual selection if the disc is not in TheDiscDB.")
+	flag.BoolVar(&autoSelect, "auto", false, "Auto select. Rips the titles that TheDiscDB identifies as one of the configured types (auto_select_types, default: MainMovie and Episode) without asking. Falls back to the manual selection if the disc is not in TheDiscDB. Overrides auto_select_titles in the config; use -auto=false to ask anyway.")
 	flag.StringVar(&automationNames, "a", "", "Automations. A comma delimited list of automation names to run after encoding. Example: -a move-to-plex,notify-discord")
 
 	flag.Usage = func() {
@@ -273,7 +273,15 @@ func main() {
 		}
 	}
 
-	err = hmkv.Exec(mkv, hb, discIdInts, getVersion(), autoNames, autoSelect)
+	// Only pass -auto on if it was given, so that auto_select_titles in the config applies otherwise.
+	var autoSelectOverride *bool
+	flag.Visit(func(f *flag.Flag) {
+		if f.Name == "auto" {
+			autoSelectOverride = &autoSelect
+		}
+	})
+
+	err = hmkv.Exec(mkv, hb, discIdInts, getVersion(), autoNames, autoSelectOverride)
 	if err != nil {
 		if err == hmkv.ErrConfigNotFound {
 			fmt.Printf("Config file not found. Please run the configuration wizard with 'handymkv -c'.\n\n")

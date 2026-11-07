@@ -12,7 +12,8 @@ The main package is responsible for parsing command line arguments and prerequis
   -v         Print the application version and exit.
   -d string  Comma-delimited list of disc indexes to rip. (default "0")
   -a string  Comma-delimited list of automation names to run after encoding.
-  -auto      Select the titles TheDiscDB identifies as main movie or episodes automatically.
+  -auto      Select the titles of the configured TheDiscDB types (default: main movie, episodes)
+             automatically. Overrides auto_select_titles in the config (-auto=false).
 
 ## Subcommands
 
