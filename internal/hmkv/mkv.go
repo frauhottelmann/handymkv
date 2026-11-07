@@ -47,6 +47,8 @@ type TitleInfo struct {
 	// A short name from TheDiscDB for the progress table, without the series/movie name
 	// (e.g. "S01E22 - Skin of Evil"). Empty if unknown.
 	DiscDBShortName string
+	// The index of the matched title in TheDiscDB. Only valid if DiscDBType is set.
+	discDBTitleIndex int
 }
 
 // ProgressName is the name shown in the progress table.

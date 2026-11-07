@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -285,5 +286,66 @@ func TestDiscDBClientNoMatchAndErrors(t *testing.T) {
 	c.Endpoint = srv.URL + "/err"
 	if _, err := c.LookupByHash(context.Background(), "X"); err == nil || !strings.Contains(err.Error(), "boom") {
 		t.Errorf("err = %v, want GraphQL error", err)
+	}
+}
+
+func TestSelectDiscDBMainContentSeries(t *testing.T) {
+	titles := []TitleInfo{
+		{Index: 0, FileName: "title_t00.mkv", SourceFile: "00800.mpls", SegmentMap: "3,4", FileSizeBytes: 3000},
+		{Index: 1, FileName: "title_t01.mkv", SourceFile: "00801.mpls", FileSizeBytes: 2000},
+		{Index: 2, FileName: "title_t02.mkv", SourceFile: "00800.mpls", SegmentMap: "1,2", FileSizeBytes: 1000},
+		{Index: 3, FileName: "title_t03.mkv", SourceFile: "00900.mpls", FileSizeBytes: 500},
+		{Index: 4, FileName: "title_t04.mkv", SourceFile: "00901.mpls", FileSizeBytes: 400},
+	}
+	ApplyDiscDBMatch(titles, sampleMatch())
+
+	got := SelectDiscDBMainContent(titles)
+	var ids []int
+	for _, ti := range got {
+		ids = append(ids, ti.Index)
+	}
+	if want := []int{0, 1, 2}; !slices.Equal(ids, want) {
+		t.Errorf("selected = %v, want %v (episodes only)", ids, want)
+	}
+}
+
+func TestSelectDiscDBMainContentMovieSkipsDuplicates(t *testing.T) {
+	match := DiscDBMatch{
+		MediaTitle: "Heat",
+		MediaYear:  1995,
+		MediaType:  "Movie",
+		Disc: discDBDisc{Titles: []discDBTitle{
+			{Index: 0, SourceFile: "00003.mpls", Size: 10, Item: &discDBItem{Title: "Heat", Type: "MainMovie"}},
+			{Index: 1, SourceFile: "00011.mpls", Size: 20, Item: &discDBItem{Title: "Trailer", Type: "Trailer"}},
+		}},
+	}
+	titles := []TitleInfo{
+		{Index: 0, FileName: "a.mkv", SourceFile: "00011.mpls"},
+		{Index: 1, FileName: "b.mkv", SourceFile: "00003.mpls"},
+		// The same playlist listed twice by MakeMKV must not be ripped twice.
+		{Index: 2, FileName: "c.mkv", SourceFile: "00003.mpls"},
+		{Index: 3, FileName: "d.mkv", SourceFile: "00099.mpls"},
+	}
+	ApplyDiscDBMatch(titles, match)
+
+	got := SelectDiscDBMainContent(titles)
+	if len(got) != 1 || got[0].Index != 1 {
+		t.Fatalf("selected = %+v, want only title 1", got)
+	}
+	if got[0].OutputFileName() != "Heat (1995).mkv" {
+		t.Errorf("OutputFileName() = %q", got[0].OutputFileName())
+	}
+}
+
+func TestSelectDiscDBMainContentUnknownDisc(t *testing.T) {
+	titles := []TitleInfo{{Index: 0, FileName: "a.mkv"}, {Index: 1, FileName: "b.mkv"}}
+	if got := SelectDiscDBMainContent(titles); len(got) != 0 {
+		t.Errorf("selected = %+v, want none", got)
+	}
+	if got := autoSelectTitles(titles, true); got != nil {
+		t.Errorf("autoSelectTitles = %+v, want nil (fallback to manual selection)", got)
+	}
+	if got := autoSelectTitles(titles, false); got != nil {
+		t.Errorf("autoSelectTitles = %+v, want nil when TheDiscDB is disabled", got)
 	}
 }
