@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -571,22 +572,77 @@ func ApplyDiscDBMatch(titles []TitleInfo, match DiscDBMatch) int {
 	return named
 }
 
-// IsDiscDBMainContent reports whether TheDiscDB identified the title as main content: the main
-// movie of a movie disc or an episode of a series disc.
-func (t *TitleInfo) IsDiscDBMainContent() bool {
-	return strings.EqualFold(t.DiscDBType, "MainMovie") || strings.EqualFold(t.DiscDBType, "Episode")
+// DiscDBTitleTypes are the item types TheDiscDB assigns to the titles of a disc, as defined by
+// its data validation (housekeeping/appliances/check-summaries.ts in github.com/TheDiscDb/data).
+var DiscDBTitleTypes = []string{
+	"MainMovie",
+	"Episode",
+	"Extra",
+	"Trailer",
+	"DeletedScene",
+	"Other",
+	"Interview",
+	"Featurette",
+	"Scene",
+	"Music",
+	"Short",
 }
 
-// SelectDiscDBMainContent returns the titles that TheDiscDB identified as main movie or episode,
-// in disc order. If several MakeMKV titles match the same TheDiscDB title (e.g. the same
-// playlist listed twice), only the first one is returned, so nothing is ripped twice.
-// The result is empty if the disc was not identified or contains no main content.
-func SelectDiscDBMainContent(titles []TitleInfo) []TitleInfo {
+// DefaultAutoSelectTypes are selected automatically if no types are configured: the main movie of
+// a movie disc and the episodes of a series disc.
+var DefaultAutoSelectTypes = []string{"MainMovie", "Episode"}
+
+// ParseDiscDBTitleTypes turns a list of type names (any case) or 1-based numbers into
+// TheDiscDB's spelling of the types. Empty entries and duplicates are dropped.
+func ParseDiscDBTitleTypes(values []string) ([]string, error) {
+	result := make([]string, 0, len(values))
+	seen := make(map[string]struct{})
+
+	for _, v := range values {
+		v = strings.TrimSpace(v)
+		if v == "" {
+			continue
+		}
+
+		canonical := ""
+		if n, err := strconv.Atoi(v); err == nil {
+			if n >= 1 && n <= len(DiscDBTitleTypes) {
+				canonical = DiscDBTitleTypes[n-1]
+			}
+		} else {
+			for _, t := range DiscDBTitleTypes {
+				if strings.EqualFold(t, v) {
+					canonical = t
+					break
+				}
+			}
+		}
+
+		if canonical == "" {
+			return nil, fmt.Errorf("unknown TheDiscDB title type '%s' (valid types: %s)", v, strings.Join(DiscDBTitleTypes, ", "))
+		}
+
+		if _, dup := seen[canonical]; dup {
+			continue
+		}
+		seen[canonical] = struct{}{}
+		result = append(result, canonical)
+	}
+
+	return result, nil
+}
+
+// SelectDiscDBTitlesByType returns the titles that TheDiscDB identified as one of the given types
+// (compared case-insensitively), in disc order. If several MakeMKV titles match the same
+// TheDiscDB title (e.g. the same playlist listed twice), only the first one is returned, so
+// nothing is ripped twice. The result is empty if the disc was not identified or contains no
+// title of these types.
+func SelectDiscDBTitlesByType(titles []TitleInfo, types []string) []TitleInfo {
 	selected := make([]TitleInfo, 0)
 	seen := make(map[int]struct{})
 
 	for _, t := range titles {
-		if !t.IsDiscDBMainContent() {
+		if t.DiscDBType == "" || !slices.ContainsFunc(types, func(s string) bool { return strings.EqualFold(s, t.DiscDBType) }) {
 			continue
 		}
 		if _, dup := seen[t.discDBTitleIndex]; dup {

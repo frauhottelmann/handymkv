@@ -83,9 +83,10 @@ Usage of handymkv:
         Automations. A comma delimited list of automation names to run after encoding.
         Example: -a move-to-plex,notify-discord
   -auto
-        Auto select. Rips the titles that TheDiscDB identifies as main movie (movies) or
-        episodes (series) without asking. Falls back to the manual selection if the disc
-        is not in TheDiscDB.
+        Auto select. Rips the titles that TheDiscDB identifies as one of the configured
+        types (auto_select_types, default: MainMovie and Episode) without asking. Falls back
+        to the manual selection if the disc is not in TheDiscDB. Overrides
+        auto_select_titles in the config; use -auto=false to ask anyway.
   -d string
         Discs. A comma delimited list of disc indexes to rip. Example: -d 0,1,2 (default "0")
   -v    Version. Prints the version of the application.
@@ -251,22 +252,35 @@ If the disc is not mounted or not in TheDiscDB, HandyMKV asks for a movie or ser
 
 ### Automatic title selection
 
-With the `-auto` flag HandyMKV skips the title prompt and selects the titles itself:
+With the `-auto` flag (or `"auto_select_titles": true` in `config.json`) HandyMKV skips the title prompt and selects the titles itself. By default it selects:
 
 - Movies: every title TheDiscDB lists as `MainMovie`
 - Series: every title TheDiscDB lists as `Episode`
 
-Extras, trailers, deleted scenes and titles TheDiscDB does not know are left out. If MakeMKV lists the same playlist more than once, it is ripped only once. The selected IDs are printed before ripping starts:
+Titles of other types and titles TheDiscDB does not know are left out. If MakeMKV lists the same playlist more than once, it is ripped only once. The selected IDs are printed before ripping starts:
 
 ```
-Automatically selected titles (TheDiscDB main movie/episodes): 0,1,2
+Automatically selected titles (TheDiscDB types MainMovie, Episode): 0,1,2
 ```
 
-If the disc is not in TheDiscDB (and no disc is picked in the search), TheDiscDB finds no main movie or episodes on it, or the lookup is disabled in the configuration, HandyMKV prints a warning and falls back to the normal manual selection for that disc. With several discs (`-d 0,1`) this is decided per disc.
+If the disc is not in TheDiscDB (and no disc is picked in the search), TheDiscDB finds no titles of the selected types on it, or the lookup is disabled in the configuration, HandyMKV prints a warning and falls back to the normal manual selection for that disc. With several discs (`-d 0,1`) this is decided per disc.
 
 ```shell
 handymkv -auto -d 0,1
 ```
+
+The automatic selection can be enabled permanently and the selected types changed in `config.json` (the configuration wizard asks for both):
+
+```json
+{
+  "auto_select_titles": true,
+  "auto_select_types": ["MainMovie", "Episode", "Extra", "Featurette"]
+}
+```
+
+Available types (as used by TheDiscDB): `MainMovie`, `Episode`, `Extra`, `Trailer`, `DeletedScene`, `Other`, `Interview`, `Featurette`, `Scene`, `Music`, `Short`. Names are not case-sensitive; an unknown name is reported as a configuration error. Without `auto_select_types`, `MainMovie` and `Episode` are used.
+
+`-auto` and `-auto=false` override `auto_select_titles` for a single run, e.g. `handymkv -auto=false` to pick the titles by hand although the configuration enables the automatic selection.
 
 ### Configuration
 
