@@ -2,6 +2,7 @@ package hmkv
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -292,9 +293,17 @@ func Exec(mkv *MakeMKV, hb *HandBrakeCLI, discIds []int, appVersion string, auto
 
 	processDuration := time.Since(processStartTime).Round(time.Second)
 
-	fmt.Printf("\nOperation Complete. Time Elapsed - %s\n", formatTimeElapsedString(processDuration))
+	ripFailures := tracker.ripFailures
+	successfulTitles := withoutFailedTitles(processTitles, ripFailures)
 
-	totalSizeRaw, totalSizeEncoded, err := calculateTotalFileSizes(processTitles, config)
+	if len(ripFailures) > 0 {
+		fmt.Printf("\nOperation finished with errors. Time Elapsed - %s\n", formatTimeElapsedString(processDuration))
+		printRipFailures(ripFailures)
+	} else {
+		fmt.Printf("\nOperation Complete. Time Elapsed - %s\n", formatTimeElapsedString(processDuration))
+	}
+
+	totalSizeRaw, totalSizeEncoded, err := calculateTotalFileSizes(successfulTitles, config)
 
 	if err != nil {
 		fmt.Printf("An error occurred while calculating total sizes - %v\n", err)
@@ -315,7 +324,7 @@ func Exec(mkv *MakeMKV, hb *HandBrakeCLI, discIds []int, appVersion string, auto
 			config.HBOutputDirectory,
 			config.MKVOutputDirectory,
 			processDuration,
-			len(processTitles),
+			len(successfulTitles),
 			config.DeleteRawMKVFiles,
 			totalSizeRaw,
 			totalSizeEncoded,
@@ -346,13 +355,50 @@ func Exec(mkv *MakeMKV, hb *HandBrakeCLI, discIds []int, appVersion string, auto
 	}
 
 	if config.DeleteRawMKVFiles {
-		deleteRawFiles(config)
+		if len(ripFailures) > 0 {
+			// Keep the directory so the MakeMKV logs of the failed titles are not lost.
+			fmt.Printf("\nRaw unencoded files were not deleted because some titles could not be ripped. The MakeMKV logs are in: %s\n", config.MKVOutputDirectory)
+		} else {
+			deleteRawFiles(config)
+		}
 	}
 
-	// Tell the user where the encoded files are located
-	fmt.Printf("\nEncoded files are located in: %s\n\n", config.HBOutputDirectory)
+	if len(successfulTitles) > 0 {
+		// Tell the user where the encoded files are located
+		fmt.Printf("\nEncoded files are located in: %s\n\n", config.HBOutputDirectory)
+	}
+
+	if len(ripFailures) > 0 {
+		return fmt.Errorf("%d of %d title(s) could not be ripped", len(ripFailures), len(processTitles))
+	}
 
 	return nil
+}
+
+// withoutFailedTitles returns the titles that were not reported as failed.
+func withoutFailedTitles(titles []TitleInfo, failures []*TitleRipError) []TitleInfo {
+	result := make([]TitleInfo, 0, len(titles))
+
+	for _, t := range titles {
+		failed := slices.ContainsFunc(failures, func(f *TitleRipError) bool {
+			return f.DiscId == t.DiscId && f.TitleIndex == t.Index
+		})
+
+		if !failed {
+			result = append(result, t)
+		}
+	}
+
+	return result
+}
+
+// printRipFailures lists the titles that could not be ripped and why.
+func printRipFailures(failures []*TitleRipError) {
+	fmt.Printf("\nThe following title(s) could not be ripped and were skipped (no rename, no encoding):\n")
+
+	for _, f := range failures {
+		fmt.Printf("  - %v\n", f)
+	}
 }
 
 func ripTitles(
@@ -392,9 +438,26 @@ func ripTitles(
 		stopPoller()
 
 		if ripErr != nil {
-			tracker.setError(ripErr)
-			cancelProcessing()
-			return
+			var titleErr *TitleRipError
+
+			// A single failed title does not stop the run: it is reported at the end and the
+			// remaining titles are processed. Anything else (e.g. cancellation) stops everything.
+			if !errors.As(ripErr, &titleErr) {
+				if ctx.Err() == nil {
+					tracker.setError(ripErr)
+					cancelProcessing()
+				}
+				return
+			}
+
+			tracker.addRipFailure(titleErr)
+			tracker.applyChange(title.Index, title.DiscId, func(status *titleStatus) {
+				status.Ripping = Failed
+				status.RippingProgress = 0
+				status.Encoding = Skipped
+			})
+			tracker.forceRefresh()
+			continue
 		}
 
 		// Update progress for ripping completion

@@ -115,3 +115,18 @@ func TestConfiguredExtraArgsReachHandBrake(t *testing.T) {
 		t.Errorf("expected %v, got %v", expected, args)
 	}
 }
+
+func TestWithoutFailedTitles(t *testing.T) {
+	titles := []TitleInfo{
+		{Index: 0, DiscId: 0},
+		{Index: 1, DiscId: 0},
+		{Index: 1, DiscId: 1},
+	}
+	failures := []*TitleRipError{{DiscId: 0, TitleIndex: 1}}
+
+	got := withoutFailedTitles(titles, failures)
+
+	if len(got) != 2 || got[0].Index != 0 || got[1].DiscId != 1 {
+		t.Errorf("unexpected result: %+v", got)
+	}
+}
