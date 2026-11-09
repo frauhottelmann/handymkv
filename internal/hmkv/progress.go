@@ -14,6 +14,7 @@ type progressTracker struct {
 	statuses          []titleStatus
 	mutex             sync.Mutex
 	err               error
+	ripFailures       []*TitleRipError
 	animationFrame    int // Shared animation frame for synchronized ellipsis
 	lastRefreshTime   time.Time
 	refreshInterval   time.Duration // Default: 200ms
@@ -26,6 +27,10 @@ const (
 	Pending statusValue = iota
 	InProgress
 	Complete
+	// The step failed for this title.
+	Failed
+	// The step was not run because an earlier step failed.
+	Skipped
 )
 
 // String representation of the statusValue.
@@ -37,6 +42,10 @@ func (s statusValue) String() string {
 		return "In Progress"
 	case Complete:
 		return "Complete"
+	case Failed:
+		return "Failed"
+	case Skipped:
+		return "Skipped"
 	default:
 		return "Unknown"
 	}
@@ -260,6 +269,15 @@ func (pt *progressTracker) setError(err error) {
 	pt.err = err
 }
 
+// addRipFailure records a title that could not be ripped. Processing of the other titles
+// continues.
+func (pt *progressTracker) addRipFailure(failure *TitleRipError) {
+	pt.mutex.Lock()
+	defer pt.mutex.Unlock()
+
+	pt.ripFailures = append(pt.ripFailures, failure)
+}
+
 func getColor(status statusValue) string {
 	switch status {
 	case Pending:
@@ -268,6 +286,8 @@ func getColor(status statusValue) string {
 		return colorBlue
 	case Complete:
 		return colorGreen
+	case Failed, Skipped:
+		return colorRed
 	default:
 		return colorReset
 	}

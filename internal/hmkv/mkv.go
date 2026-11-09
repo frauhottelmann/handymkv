@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"sort"
 	"strconv"
@@ -166,42 +167,139 @@ func NewMakeMKV(executable string) *MakeMKV {
 	}
 }
 
+// ripFailedPattern matches the summary MakeMKV prints after copying, e.g.
+// "Copy complete. 0 titles saved, 1 failed."
+var ripFailedPattern = regexp.MustCompile(`(?i)titles? saved,\s*(\d+)\s+failed`)
+
+// TitleRipError is returned when a single title could not be ripped. The other titles of the
+// disc can still be processed.
+type TitleRipError struct {
+	DiscId     int
+	TitleIndex int
+	// A human readable name of the title (TheDiscDB name or MakeMKV file name).
+	Name string
+	// What went wrong.
+	Reason string
+	// Path of the log file with the MakeMKV output, empty if it could not be written.
+	LogFilePath string
+}
+
+func (e *TitleRipError) Error() string {
+	msg := fmt.Sprintf("ripping title %d (%s) from disc %d failed - %s", e.TitleIndex, e.Name, e.DiscId, e.Reason)
+
+	if e.LogFilePath != "" {
+		msg += fmt.Sprintf(" - MakeMKV output can be found in log file %s", e.LogFilePath)
+	}
+
+	return msg
+}
+
+// DisplayName returns the name of the title for messages: the name from TheDiscDB if known,
+// otherwise the output file name of MakeMKV.
+func (t *TitleInfo) DisplayName() string {
+	if t.DiscDBName != "" {
+		return t.DiscDBName
+	}
+
+	return t.OutputFileName()
+}
+
 func (mkv *MakeMKV) ripTitle(ctx context.Context, title *TitleInfo, destDir string) error {
 	cmd := exec.CommandContext(ctx, mkv.executable, "mkv", fmt.Sprintf("disc:%d", title.DiscId), fmt.Sprintf("%d", title.Index), destDir)
 
 	cmdOut, err := cmd.CombinedOutput()
-	if err != nil {
-		// write cmdOut to a log file in the dest dir
-		logFilePath := filepath.Join(destDir, "rip_err.log")
-		f, openLogFileErr := os.OpenFile(logFilePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 
-		if openLogFileErr != nil {
-			return fmt.Errorf("ripping title from disc was not successful - %w - an error occurred while creating log file - %w", err, openLogFileErr)
-		}
-
-		defer f.Close()
-
-		// determine OS-specific newline
-		newline := "\n"
-		if runtime.GOOS == "windows" {
-			newline = "\r\n"
-		}
-
-		// write combined output and error to log in one call
-		logContent := fmt.Sprintf("MakeMKV Output%s%s#####%s%s#####%s%sError: %v",
-			newline, newline, newline,
-			string(cmdOut),
-			newline, newline,
-			err)
-
-		if _, writeLogFileErr := f.WriteString(logContent); writeLogFileErr != nil {
-			return fmt.Errorf("ripping title from disc was not successful - %w - failed to write to log file: %w", err, writeLogFileErr)
-		}
-
-		return fmt.Errorf("ripping title from disc was not successful - mkv error details can be found in log file %s", logFilePath)
+	// A cancelled run is not a failure of this title.
+	if ctx.Err() != nil {
+		return ctx.Err()
 	}
 
-	return nil
+	reason := checkRipResult(string(cmdOut), err, filepath.Join(destDir, title.FileName))
+	if reason == "" {
+		return nil
+	}
+
+	ripErr := &TitleRipError{
+		DiscId:     title.DiscId,
+		TitleIndex: title.Index,
+		Name:       title.DisplayName(),
+		Reason:     reason,
+	}
+
+	logFilePath, logErr := writeRipLog(destDir, title, string(cmdOut), err)
+	if logErr != nil {
+		ripErr.Reason += fmt.Sprintf(" (the MakeMKV output could not be written to a log file - %v)", logErr)
+	} else {
+		ripErr.LogFilePath = logFilePath
+	}
+
+	return ripErr
+}
+
+// checkRipResult decides whether MakeMKV ripped a title successfully. makemkvcon does not
+// always exit with an error if a title fails (e.g. because of read errors), so its output and
+// the output file are checked as well. Returns an empty string on success, otherwise the reason.
+func checkRipResult(output string, runErr error, outputPath string) string {
+	if runErr != nil {
+		return fmt.Sprintf("MakeMKV exited with an error (%v)", runErr)
+	}
+
+	if m := ripFailedPattern.FindStringSubmatch(output); m != nil {
+		if failed, _ := strconv.Atoi(m[1]); failed > 0 {
+			return "MakeMKV reported that the title could not be saved"
+		}
+	}
+
+	stat, statErr := os.Stat(outputPath)
+	if statErr != nil {
+		if os.IsNotExist(statErr) {
+			return fmt.Sprintf("MakeMKV did not create the output file %s", outputPath)
+		}
+
+		return fmt.Sprintf("the output file %s could not be checked (%v)", outputPath, statErr)
+	}
+
+	if stat.Size() == 0 {
+		return fmt.Sprintf("the output file %s is empty", outputPath)
+	}
+
+	return ""
+}
+
+// writeRipLog appends the MakeMKV output of a failed rip to rip_err.log in destDir.
+func writeRipLog(destDir string, title *TitleInfo, output string, runErr error) (string, error) {
+	logFilePath := filepath.Join(destDir, "rip_err.log")
+
+	f, err := os.OpenFile(logFilePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+
+	// determine OS-specific newline
+	newline := "\n"
+	if runtime.GOOS == "windows" {
+		newline = "\r\n"
+		output = strings.ReplaceAll(strings.ReplaceAll(output, "\r\n", "\n"), "\n", newline)
+	}
+
+	errText := "none"
+	if runErr != nil {
+		errText = runErr.Error()
+	}
+
+	logContent := fmt.Sprintf("Title %d (%s), file %s%sMakeMKV Output%s#####%s%s%s#####%sError: %s%s%s",
+		title.Index, title.DisplayName(), title.FileName, newline,
+		newline, newline,
+		output, newline,
+		newline,
+		errText, newline, newline)
+
+	if _, err := f.WriteString(logContent); err != nil {
+		return "", err
+	}
+
+	return logFilePath, nil
 }
 
 func (mkv *MakeMKV) getTitlesFromDisc(discId int) ([]TitleInfo, error) {

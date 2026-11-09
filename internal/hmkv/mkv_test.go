@@ -1,9 +1,12 @@
 package hmkv
 
 import (
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -159,5 +162,84 @@ TINFO:1,27,0,"title_t01.mkv"
 	// Without a source file name (DVD) the source title id is used.
 	if titles[1].SourceFile != "2" {
 		t.Errorf("unexpected title 1 source: %q", titles[1].SourceFile)
+	}
+}
+
+func TestCheckRipResult(t *testing.T) {
+	dir := t.TempDir()
+	okFile := filepath.Join(dir, "ok.mkv")
+	emptyFile := filepath.Join(dir, "empty.mkv")
+	if err := os.WriteFile(okFile, []byte("data"), 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(emptyFile, nil, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name    string
+		output  string
+		runErr  error
+		path    string
+		wantErr string
+	}{
+		{"success", "Copy complete. 1 titles saved.", nil, okFile, ""},
+		{"exit error", "", errors.New("exit status 1"), okFile, "exited with an error"},
+		{"reported failure", "Copy complete. 0 titles saved, 1 failed.", nil, okFile, "could not be saved"},
+		{"zero failed", "Copy complete. 1 titles saved, 0 failed.", nil, okFile, ""},
+		{"missing file", "Copy complete. 1 titles saved.", nil, filepath.Join(dir, "missing.mkv"), "did not create the output file"},
+		{"empty file", "", nil, emptyFile, "is empty"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := checkRipResult(tt.output, tt.runErr, tt.path)
+			if tt.wantErr == "" && got != "" {
+				t.Errorf("expected success, got %q", got)
+			}
+			if tt.wantErr != "" && !strings.Contains(got, tt.wantErr) {
+				t.Errorf("got %q, want it to contain %q", got, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestRipTitleReportsMissingOutputFile(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses a shell script as fake makemkvcon")
+	}
+
+	// makemkvcon exits successfully but does not write the file.
+	script := filepath.Join(t.TempDir(), "makemkvcon")
+	content := "#!/bin/sh\necho 'Copy complete. 0 titles saved, 1 failed.'\nexit 0\n"
+	if err := os.WriteFile(script, []byte(content), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	destDir := t.TempDir()
+	title := &TitleInfo{Index: 3, DiscId: 1, FileName: "title_t03.mkv", DiscDBName: "S07E09 - Force of Nature"}
+
+	err := NewMakeMKV(script).ripTitle(context.Background(), title, destDir)
+
+	var ripErr *TitleRipError
+	if !errors.As(err, &ripErr) {
+		t.Fatalf("expected TitleRipError, got %v", err)
+	}
+
+	if ripErr.TitleIndex != 3 || ripErr.DiscId != 1 {
+		t.Errorf("unexpected title in error: %+v", ripErr)
+	}
+
+	msg := err.Error()
+	if !strings.Contains(msg, "title 3") || !strings.Contains(msg, "Force of Nature") {
+		t.Errorf("error does not name the title: %q", msg)
+	}
+
+	logContent, readErr := os.ReadFile(filepath.Join(destDir, "rip_err.log"))
+	if readErr != nil {
+		t.Fatalf("log file not written: %v", readErr)
+	}
+	if !strings.Contains(string(logContent), "1 failed") {
+		t.Errorf("log does not contain MakeMKV output: %q", logContent)
 	}
 }

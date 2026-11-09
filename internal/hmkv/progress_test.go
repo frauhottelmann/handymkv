@@ -13,6 +13,8 @@ func TestStatusValueString(t *testing.T) {
 		{Pending, "Pending"},
 		{InProgress, "In Progress"},
 		{Complete, "Complete"},
+		{Failed, "Failed"},
+		{Skipped, "Skipped"},
 		{statusValue(99), "Unknown"},
 	}
 
@@ -32,6 +34,8 @@ func TestGetColor(t *testing.T) {
 		{Pending, colorYellow},
 		{InProgress, colorBlue},
 		{Complete, colorGreen},
+		{Failed, colorRed},
+		{Skipped, colorRed},
 		{statusValue(99), colorReset},
 	}
 
