@@ -250,7 +250,7 @@ The disc is identified by TheDiscDB's content hash, which is calculated from the
 
 If the disc is not mounted or not in TheDiscDB, HandyMKV lets you identify it by hand in three steps:
 
-1. **Movie or series**: enter a name to search TheDiscDB and pick the movie, series or boxset from the results. Instead of a name you can also enter a disc ID (the 32-character content hash shown on TheDiscDB, e.g. `A1B2C3...`), which selects that disc directly and skips the other steps.
+1. **Movie or series**: enter a name to search TheDiscDB and pick the movie, series or boxset from the results. Instead of a name you can also enter the **Disc ID** or the **Disc Hash** shown on the disc page of TheDiscDB (32 hex characters each), which selects that disc directly and skips the other steps.
 2. **Season**: enter the season number. The available seasons are listed; this step is skipped for movies and for series with only one season in TheDiscDB.
 3. **Disc**: enter the disc number within that season (`l` lists all discs of the movie or series). This step is skipped if there is only one disc.
 

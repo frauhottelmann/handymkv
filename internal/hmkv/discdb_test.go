@@ -529,6 +529,16 @@ func fakeDiscDBServer(t *testing.T) *httptest.Server {
 				{"title":"Show","year":2020,"type":"Series","releases":[
 					{"title":"Season 1","year":2021,"discs":[` + disc(1, "1", "remake") + `]}]}
 			]}}}`))
+		case strings.Contains(req.Query, "HandyMKVDiscByID"):
+			if !strings.Contains(req.Query, "globalDiscId: { eq: $hash }") || strings.Contains(req.Query, "contentHash: {") {
+				t.Errorf("disc ID query filters the wrong field: %s", req.Query)
+			}
+			if req.Variables["hash"] == strings.Repeat("C", 32) {
+				_, _ = w.Write([]byte(`{"data":{"mediaItems":{"nodes":[{"title":"Show","year":2001,"type":"Series","releases":[
+					{"title":"Season 1","year":2002,"discs":[` + disc(2, "1", "a2") + `]}]}]},"boxsets":{"nodes":[]}}}`))
+			} else {
+				_, _ = w.Write([]byte(`{"data":{"mediaItems":{"nodes":[]},"boxsets":{"nodes":[]}}}`))
+			}
 		case strings.Contains(req.Query, "HandyMKVDiscByHash"):
 			if req.Variables["hash"] == strings.Repeat("A", 32) {
 				_, _ = w.Write([]byte(`{"data":{"mediaItems":{"nodes":[{"title":"Show","year":2001,"type":"Series","releases":[
@@ -582,10 +592,16 @@ func TestSearchDiscDBInteractiveByDiscID(t *testing.T) {
 	c := NewDiscDBClient("", "")
 	c.Endpoint = srv.URL
 
-	// An unknown ID, then a known one in lower case.
+	// An unknown ID, then a disc hash in lower case.
 	withInput(t, strings.Repeat("b", 32)+"\n"+strings.Repeat("a", 32)+"\n")
 	m := searchDiscDBInteractive(c, nil)
 	if m == nil || m.Disc.Titles[0].SourceFile != "b2" {
+		t.Fatalf("unexpected match %+v", m)
+	}
+	// A disc ID.
+	withInput(t, strings.Repeat("c", 32)+"\n")
+	m = searchDiscDBInteractive(c, nil)
+	if m == nil || m.Disc.Titles[0].SourceFile != "a2" {
 		t.Fatalf("unexpected match %+v", m)
 	}
 }
