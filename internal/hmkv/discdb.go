@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"sort"
 	"strconv"
@@ -112,6 +113,9 @@ type DiscDBMatch struct {
 	// Title of the release (e.g. "Season 1 Blu-ray").
 	ReleaseTitle string
 	Disc         discDBDisc
+
+	// release numbers the releases of one response, so discs of the same release can be grouped.
+	release int
 }
 
 func (m DiscDBMatch) String() string {
@@ -175,8 +179,27 @@ var discDBHashQuery = `query HandyMKVDiscByHash($hash: String) {
   }
 }`
 
-var discDBSearchQuery = `query HandyMKVSearch($term: String) {
-  mediaItems(where: { title: { contains: $term } }, first: 15, order: { title: ASC }) {
+var discDBMediaSearchQuery = `query HandyMKVSearchMedia($term: String) {
+  mediaItems(where: { title: { contains: $term } }, first: 25, order: { title: ASC }) {
+    nodes {
+      title
+      year
+      type
+    }
+  }
+  boxsets(where: { title: { contains: $term } }, first: 10) {
+    nodes {
+      title
+      release {
+        title
+        year
+      }
+    }
+  }
+}`
+
+var discDBMediaItemDiscsQuery = `query HandyMKVMediaItemDiscs($title: String) {
+  mediaItems(where: { title: { eq: $title } }) {
     nodes {
       title
       year
@@ -189,7 +212,10 @@ var discDBSearchQuery = `query HandyMKVSearch($term: String) {
       }
     }
   }
-  boxsets(where: { title: { contains: $term } }, first: 10) {
+}`
+
+var discDBBoxsetDiscsQuery = `query HandyMKVBoxsetDiscs($title: String) {
+  boxsets(where: { title: { eq: $title } }) {
     nodes {
       title
       release {
@@ -275,9 +301,12 @@ func flattenDiscDBMatches(data *discDBQueryData, onlyHash string) []DiscDBMatch 
 		return onlyHash == "" || strings.EqualFold(d.ContentHash, onlyHash)
 	}
 
+	release := 0
+
 	if data.MediaItems != nil {
 		for _, mi := range data.MediaItems.Nodes {
 			for _, rel := range mi.Releases {
+				release++
 				for _, d := range rel.Discs {
 					if !keep(d) {
 						continue
@@ -288,6 +317,7 @@ func flattenDiscDBMatches(data *discDBQueryData, onlyHash string) []DiscDBMatch 
 						MediaType:    mi.Type,
 						ReleaseTitle: rel.Title,
 						Disc:         d,
+						release:      release,
 					})
 				}
 			}
@@ -299,6 +329,7 @@ func flattenDiscDBMatches(data *discDBQueryData, onlyHash string) []DiscDBMatch 
 			if bs.Release == nil {
 				continue
 			}
+			release++
 			for _, d := range bs.Release.Discs {
 				if !keep(d) {
 					continue
@@ -309,6 +340,7 @@ func flattenDiscDBMatches(data *discDBQueryData, onlyHash string) []DiscDBMatch 
 					MediaType:    "Boxset",
 					ReleaseTitle: bs.Release.Title,
 					Disc:         d,
+					release:      release,
 				})
 			}
 		}
@@ -334,14 +366,84 @@ func (c *DiscDBClient) LookupByHash(ctx context.Context, hash string) ([]DiscDBM
 	return matches, nil
 }
 
-// Search returns all discs of movies, series and boxsets whose title contains the term.
-func (c *DiscDBClient) Search(ctx context.Context, term string) ([]DiscDBMatch, error) {
-	data, err := c.query(ctx, discDBSearchQuery, map[string]any{"term": term})
+// DiscDBMedia is a movie, series or boxset found by a title search.
+type DiscDBMedia struct {
+	Title string
+	Year  int
+	// TheDiscDB's media type ("Movie", "Series") or "Boxset".
+	Type string
+}
+
+func (m DiscDBMedia) String() string {
+	var sb strings.Builder
+	sb.WriteString(m.Title)
+	if m.Year > 0 {
+		fmt.Fprintf(&sb, " (%d)", m.Year)
+	}
+	if m.Type != "" {
+		fmt.Fprintf(&sb, " [%s]", m.Type)
+	}
+	return sb.String()
+}
+
+// SearchMedia returns the movies, series and boxsets whose title contains the term. It only
+// fetches the titles; the discs of the chosen entry are loaded with MediaDiscs.
+func (c *DiscDBClient) SearchMedia(ctx context.Context, term string) ([]DiscDBMedia, error) {
+	data, err := c.query(ctx, discDBMediaSearchQuery, map[string]any{"term": term})
 	if err != nil {
 		return nil, err
 	}
 
-	return flattenDiscDBMatches(data, ""), nil
+	result := make([]DiscDBMedia, 0)
+	seen := make(map[DiscDBMedia]struct{})
+	add := func(m DiscDBMedia) {
+		if _, dup := seen[m]; dup || strings.TrimSpace(m.Title) == "" {
+			return
+		}
+		seen[m] = struct{}{}
+		result = append(result, m)
+	}
+
+	if data.MediaItems != nil {
+		for _, mi := range data.MediaItems.Nodes {
+			add(DiscDBMedia{Title: mi.Title, Year: mi.Year, Type: mi.Type})
+		}
+	}
+	if data.Boxsets != nil {
+		for _, bs := range data.Boxsets.Nodes {
+			m := DiscDBMedia{Title: bs.Title, Type: "Boxset"}
+			if bs.Release != nil {
+				m.Year = bs.Release.Year
+			}
+			add(m)
+		}
+	}
+
+	return result, nil
+}
+
+// MediaDiscs returns all discs of all releases of a movie, series or boxset found by SearchMedia.
+func (c *DiscDBClient) MediaDiscs(ctx context.Context, media DiscDBMedia) ([]DiscDBMatch, error) {
+	query := discDBMediaItemDiscsQuery
+	if media.Type == "Boxset" {
+		query = discDBBoxsetDiscsQuery
+	}
+
+	data, err := c.query(ctx, query, map[string]any{"title": media.Title})
+	if err != nil {
+		return nil, err
+	}
+
+	// Titles are not unique (e.g. remakes), so keep only the entry that was chosen.
+	all := flattenDiscDBMatches(data, "")
+	matches := make([]DiscDBMatch, 0, len(all))
+	for _, m := range all {
+		if m.MediaType == media.Type && (media.Year == 0 || m.MediaYear == media.Year) {
+			matches = append(matches, m)
+		}
+	}
+
+	return matches, nil
 }
 
 // ---------------------------------------------------------------------------
@@ -799,7 +901,7 @@ func identifyTitlesWithDiscDB(client *DiscDBClient, titles []TitleInfo) {
 	match, err := lookupDiscByHash(ctx, client, titles[0].DevicePath)
 	if err != nil {
 		fmt.Printf("TheDiscDB: %v\n\n", err)
-		match = searchDiscDBInteractive(client, titles[0].DiscTitle)
+		match = searchDiscDBInteractive(client, titles)
 		if match == nil {
 			fmt.Println()
 			return
@@ -824,7 +926,7 @@ func lookupDiscByHash(ctx context.Context, client *DiscDBClient, devicePath stri
 	matches, err := client.LookupByHash(ctx, hash)
 	if err != nil {
 		if errors.Is(err, ErrDiscDBNoMatch) {
-			return nil, fmt.Errorf("no disc with hash %s found", hash)
+			return nil, fmt.Errorf("no disc with ID %s found", hash)
 		}
 		return nil, err
 	}
@@ -834,18 +936,130 @@ func lookupDiscByHash(ctx context.Context, client *DiscDBClient, devicePath stri
 	return &matches[0], nil
 }
 
-const maxDiscDBSearchResults = 40
+// discDBSeasonPattern finds a season number in a release or disc name, e.g. "Season 2 Blu-ray".
+var discDBSeasonPattern = regexp.MustCompile(`(?i)\b(?:season|staffel|saison|temporada|series)\s*0*(\d+)`)
 
-func searchDiscDBInteractive(client *DiscDBClient, discTitle string) *DiscDBMatch {
+// Season returns the season of the disc, or -1 if it is unknown (e.g. a movie). It is the
+// season of most episodes on the disc; discs without episodes (bonus discs) take the season from
+// the release or disc name.
+func (m DiscDBMatch) Season() int {
+	counts := make(map[int]int)
+	for _, t := range m.Disc.Titles {
+		if t.Item == nil || !strings.EqualFold(t.Item.Type, "Episode") {
+			continue
+		}
+		if s, err := strconv.Atoi(strings.TrimSpace(t.Item.Season)); err == nil && s >= 0 {
+			counts[s]++
+		}
+	}
+
+	season, best := -1, 0
+	for s, n := range counts {
+		if n > best || (n == best && s < season) {
+			season, best = s, n
+		}
+	}
+	if season >= 0 {
+		return season
+	}
+
+	for _, name := range []string{m.ReleaseTitle, m.Disc.Name} {
+		if sm := discDBSeasonPattern.FindStringSubmatch(name); sm != nil {
+			if s, err := strconv.Atoi(sm[1]); err == nil {
+				return s
+			}
+		}
+	}
+
+	return -1
+}
+
+// discDBSeasons returns the known seasons of the discs, in ascending order.
+func discDBSeasons(discs []DiscDBMatch) []int {
+	seasons := make([]int, 0)
+	for _, d := range discs {
+		if s := d.Season(); s >= 0 && !slices.Contains(seasons, s) {
+			seasons = append(seasons, s)
+		}
+	}
+	slices.Sort(seasons)
+	return seasons
+}
+
+// discDBReleaseDiscs groups the discs by release (in the order of the releases) and sorts the
+// discs of each release by their index. If season is >= 0, only discs of that season are kept,
+// so the n-th disc of a group is "disc n" of that season, even in a complete-series boxset.
+func discDBReleaseDiscs(discs []DiscDBMatch, season int) [][]DiscDBMatch {
+	groups := make([][]DiscDBMatch, 0)
+	pos := make(map[int]int)
+
+	for _, d := range discs {
+		if season >= 0 && d.Season() != season {
+			continue
+		}
+		i, ok := pos[d.release]
+		if !ok {
+			i = len(groups)
+			pos[d.release] = i
+			groups = append(groups, nil)
+		}
+		groups[i] = append(groups[i], d)
+	}
+
+	for _, g := range groups {
+		sort.SliceStable(g, func(a, b int) bool { return g[a].Disc.Index < g[b].Disc.Index })
+	}
+
+	return groups
+}
+
+// discDBDiscCandidates returns disc number n (1-based) of every release.
+func discDBDiscCandidates(groups [][]DiscDBMatch, n int) []DiscDBMatch {
+	result := make([]DiscDBMatch, 0, len(groups))
+	for _, g := range groups {
+		if n >= 1 && n <= len(g) {
+			result = append(result, g[n-1])
+		}
+	}
+	return result
+}
+
+// rankDiscDBMatches sorts the discs by the number of MakeMKV titles they identify, best first,
+// and returns these numbers in the new order.
+func rankDiscDBMatches(titles []TitleInfo, matches []DiscDBMatch) []int {
+	type ranked struct {
+		match DiscDBMatch
+		named int
+	}
+
+	list := make([]ranked, len(matches))
+	for i, m := range matches {
+		list[i] = ranked{match: m, named: ApplyDiscDBMatch(slices.Clone(titles), m)}
+	}
+	sort.SliceStable(list, func(a, b int) bool { return list[a].named > list[b].named })
+
+	scores := make([]int, len(list))
+	for i, r := range list {
+		matches[i] = r.match
+		scores[i] = r.named
+	}
+	return scores
+}
+
+// searchDiscDBInteractive lets the user identify a disc that was not found by its hash in three
+// steps: search and pick the movie or series, enter the season, enter the disc number.
+func searchDiscDBInteractive(client *DiscDBClient, titles []TitleInfo) *DiscDBMatch {
 	for {
-		fmt.Printf("Enter a movie or series name to search TheDiscDB (leave empty to skip): ")
-		term := readLine()
-		if term == "" {
+		media, match := selectDiscDBMediaInteractive(client)
+		if match != nil {
+			return match
+		}
+		if media == nil {
 			return nil
 		}
 
 		ctx, cancel := context.WithTimeout(context.Background(), discDBRequestTimeout)
-		matches, err := client.Search(ctx, term)
+		discs, err := client.MediaDiscs(ctx, *media)
 		cancel()
 
 		if err != nil {
@@ -853,35 +1067,223 @@ func searchDiscDBInteractive(client *DiscDBClient, discTitle string) *DiscDBMatc
 			return nil
 		}
 
-		if len(matches) == 0 {
+		if len(discs) == 0 {
+			fmt.Printf("\nTheDiscDB has no discs for %s.\n\n", media.String())
+			continue
+		}
+
+		if match := selectDiscDBSeasonAndDisc(*media, discs, titles); match != nil {
+			return match
+		}
+		fmt.Println()
+	}
+}
+
+// discDBHashPattern matches a TheDiscDB content hash (disc ID), e.g. "A1B2...".
+var discDBHashPattern = regexp.MustCompile(`^[0-9A-Fa-f]{32}$`)
+
+// selectDiscDBMediaInteractive is step 1: search TheDiscDB and pick a movie, series or boxset.
+// If the user enters a disc ID (content hash) instead, the disc itself is returned. Both are nil
+// if the user leaves the search empty.
+func selectDiscDBMediaInteractive(client *DiscDBClient) (*DiscDBMedia, *DiscDBMatch) {
+	for {
+		fmt.Printf("Enter a movie or series name or a disc ID to search TheDiscDB (leave empty to skip): ")
+		term := readLine()
+		if term == "" {
+			return nil, nil
+		}
+
+		if discDBHashPattern.MatchString(term) {
+			ctx, cancel := context.WithTimeout(context.Background(), discDBRequestTimeout)
+			matches, err := client.LookupByHash(ctx, term)
+			cancel()
+
+			switch {
+			case err == nil:
+				// Same as the automatic lookup: movie/series releases come before boxsets.
+				return nil, &matches[0]
+			case errors.Is(err, ErrDiscDBNoMatch):
+				fmt.Printf("\nNo disc with ID %s found.\n\n", strings.ToUpper(term))
+				continue
+			default:
+				fmt.Printf("\nTheDiscDB: %v\n\n", err)
+				return nil, nil
+			}
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), discDBRequestTimeout)
+		media, err := client.SearchMedia(ctx, term)
+		cancel()
+
+		if err != nil {
+			fmt.Printf("\nTheDiscDB: %v\n\n", err)
+			return nil, nil
+		}
+
+		if len(media) == 0 {
 			fmt.Printf("\nNo results for '%s'.\n\n", term)
 			continue
 		}
 
-		if len(matches) > maxDiscDBSearchResults {
-			fmt.Printf("\n%d discs found, please use a more specific search term.\n\n", len(matches))
-			continue
-		}
-
-		fmt.Printf("\nSelect the disc '%s' from TheDiscDB:\n\n", discTitle)
-		fmt.Printf("0. None of these (search again)\n")
-		for i, m := range matches {
-			fmt.Printf("%d. %s\n", i+1, m.String())
-		}
-		fmt.Println()
-
-		for {
-			fmt.Printf("Selection: ")
-			n, err := strconv.Atoi(readLine())
-			if err != nil || n < 0 || n > len(matches) {
-				fmt.Printf("Invalid selection.\n")
-				continue
+		var selected *DiscDBMedia
+		if len(media) == 1 {
+			selected = &media[0]
+			fmt.Printf("\nFound: %s\n", selected.String())
+		} else {
+			fmt.Printf("\nSelect the movie or series:\n\n")
+			fmt.Printf("0. None of these (search again)\n")
+			for i, m := range media {
+				fmt.Printf("%d. %s\n", i+1, m.String())
 			}
+			fmt.Println()
+
+			n := readNumber("Selection: ", 0, len(media))
 			if n == 0 {
 				fmt.Println()
-				break
+				continue
 			}
-			return &matches[n-1]
+			selected = &media[n-1]
 		}
+
+		return selected, nil
+	}
+}
+
+// selectDiscDBSeasonAndDisc are steps 2 and 3: enter the season (skipped if the discs have at
+// most one season) and the disc number (skipped if there is only one disc). If several releases
+// have such a disc (e.g. DVD and Blu-ray), the user picks one; the disc that matches most
+// titles of the inserted disc is listed first. It returns nil to go back to the search.
+func selectDiscDBSeasonAndDisc(media DiscDBMedia, discs []DiscDBMatch, titles []TitleInfo) *DiscDBMatch {
+	seasons := discDBSeasons(discs)
+
+	for {
+		season := -1
+		switch {
+		case len(seasons) == 1:
+			season = seasons[0]
+		case len(seasons) > 1:
+			names := make([]string, len(seasons))
+			for i, s := range seasons {
+				names[i] = strconv.Itoa(s)
+			}
+			fmt.Printf("\nSeasons of %s in TheDiscDB: %s\n", media.Title, strings.Join(names, ", "))
+			s, ok := readChoice("Season (leave empty to search again): ", seasons)
+			if !ok {
+				return nil
+			}
+			season = s
+		}
+
+		groups := discDBReleaseDiscs(discs, season)
+
+		match, back := selectDiscDBDisc(media, discs, groups, season, titles)
+		if match != nil {
+			return match
+		}
+		if back && len(seasons) > 1 {
+			continue
+		}
+		return nil
+	}
+}
+
+// selectDiscDBDisc is step 3. It returns the chosen disc, or nil and whether the user asked to go
+// back one step.
+func selectDiscDBDisc(media DiscDBMedia, all []DiscDBMatch, groups [][]DiscDBMatch, season int, titles []TitleInfo) (*DiscDBMatch, bool) {
+	maxDiscs := 0
+	for _, g := range groups {
+		maxDiscs = max(maxDiscs, len(g))
+	}
+
+	label := media.Title
+	if season >= 0 {
+		label = fmt.Sprintf("%s season %d", media.Title, season)
+	}
+
+	for {
+		n := 1
+		if maxDiscs > 1 {
+			fmt.Printf("\n%s has %d discs in TheDiscDB.\n", label, maxDiscs)
+			fmt.Printf("Disc number (l = list all discs, leave empty to go back): ")
+			input := strings.ToLower(readLine())
+			switch {
+			case input == "":
+				return nil, true
+			case input == "l":
+				if m := pickDiscDBMatch(slices.Clone(all), titles); m != nil {
+					return m, false
+				}
+				continue
+			default:
+				v, err := strconv.Atoi(input)
+				if err != nil || v < 1 || v > maxDiscs {
+					fmt.Printf("Invalid disc number.\n")
+					continue
+				}
+				n = v
+			}
+		}
+
+		candidates := discDBDiscCandidates(groups, n)
+		if len(candidates) == 1 {
+			return &candidates[0], false
+		}
+
+		if m := pickDiscDBMatch(candidates, titles); m != nil {
+			return m, false
+		}
+		if maxDiscs <= 1 {
+			return nil, true
+		}
+	}
+}
+
+// pickDiscDBMatch lets the user choose one of the discs. It returns nil for "none of these".
+func pickDiscDBMatch(matches []DiscDBMatch, titles []TitleInfo) *DiscDBMatch {
+	scores := rankDiscDBMatches(titles, matches)
+
+	fmt.Printf("\nSelect the disc:\n\n")
+	fmt.Printf("0. None of these (go back)\n")
+	for i, m := range matches {
+		fmt.Printf("%d. %s (%d of %d titles recognized)\n", i+1, m.String(), scores[i], len(titles))
+	}
+	fmt.Println()
+
+	n := readNumber("Selection: ", 0, len(matches))
+	if n == 0 {
+		return nil
+	}
+	return &matches[n-1]
+}
+
+// readNumber asks until the user enters a number between lo and hi. An empty input counts as 0
+// ("none of these") if 0 is allowed.
+func readNumber(prompt string, lo, hi int) int {
+	for {
+		fmt.Print(prompt)
+		input := readLine()
+		if input == "" && lo == 0 {
+			return 0
+		}
+		n, err := strconv.Atoi(input)
+		if err == nil && n >= lo && n <= hi {
+			return n
+		}
+		fmt.Printf("Invalid selection.\n")
+	}
+}
+
+// readChoice asks until the user enters one of the values. It returns false for an empty input.
+func readChoice(prompt string, values []int) (int, bool) {
+	for {
+		fmt.Print(prompt)
+		input := readLine()
+		if input == "" {
+			return 0, false
+		}
+		if n, err := strconv.Atoi(input); err == nil && slices.Contains(values, n) {
+			return n, true
+		}
+		fmt.Printf("Invalid input.\n")
 	}
 }

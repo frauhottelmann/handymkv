@@ -248,7 +248,13 @@ Titles that TheDiscDB does not know keep the MakeMKV file name.
 
 The disc is identified by TheDiscDB's content hash, which is calculated from the sizes of the video files on the disc (`BDMV/STREAM/*.m2ts` on Blu-ray, `VIDEO_TS/*.VOB/IFO/BUP` on DVD). For this the disc has to be mounted (Linux: listed in `/proc/mounts`; Windows: accessible by its drive letter; macOS: mounted under `/Volumes`). The titles are then matched by the source playlist reported by MakeMKV (e.g. `00800.mpls`), its segment map and the title size.
 
-If the disc is not mounted or not in TheDiscDB, HandyMKV asks for a movie or series name to search TheDiscDB, and lets you pick the matching disc. Leave the search empty to continue without TheDiscDB names. A lookup failure never stops the rip.
+If the disc is not mounted or not in TheDiscDB, HandyMKV lets you identify it by hand in three steps:
+
+1. **Movie or series**: enter a name to search TheDiscDB and pick the movie, series or boxset from the results. Instead of a name you can also enter a disc ID (the 32-character content hash shown on TheDiscDB, e.g. `A1B2C3...`), which selects that disc directly and skips the other steps.
+2. **Season**: enter the season number. The available seasons are listed; this step is skipped for movies and for series with only one season in TheDiscDB.
+3. **Disc**: enter the disc number within that season (`l` lists all discs of the movie or series). This step is skipped if there is only one disc.
+
+If several releases have such a disc (e.g. a DVD and a Blu-ray release, or a single season and a complete series boxset), HandyMKV lists them with the number of titles of the inserted disc each one recognizes, the best match first. Leaving a step empty goes back one step; leave the search empty to continue without TheDiscDB names. A lookup failure never stops the rip.
 
 ### Automatic title selection
 

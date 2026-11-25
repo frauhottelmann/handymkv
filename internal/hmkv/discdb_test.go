@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -425,5 +426,166 @@ func TestConfigAutoSelectTypes(t *testing.T) {
 	}
 	if _, err := readConfigFile(path); err == nil {
 		t.Error("expected an error for an unknown type")
+	}
+}
+
+func episodeDisc(release, index int, releaseTitle string, season string, sources ...string) DiscDBMatch {
+	m := DiscDBMatch{MediaTitle: "Show", MediaType: "Series", ReleaseTitle: releaseTitle, release: release}
+	m.Disc.Index = index
+	for i, src := range sources {
+		m.Disc.Titles = append(m.Disc.Titles, discDBTitle{
+			Index: i, SourceFile: src,
+			Item: &discDBItem{Title: src, Type: "Episode", Season: season, Episode: strconv.Itoa(i + 1)},
+		})
+	}
+	return m
+}
+
+func TestDiscDBMatchSeason(t *testing.T) {
+	if s := episodeDisc(1, 1, "Complete Series", "3", "a.mpls").Season(); s != 3 {
+		t.Errorf("season from episodes = %d, want 3", s)
+	}
+	bonus := DiscDBMatch{ReleaseTitle: "Season 2 Blu-ray"}
+	if s := bonus.Season(); s != 2 {
+		t.Errorf("season from release title = %d, want 2", s)
+	}
+	movie := DiscDBMatch{ReleaseTitle: "4K UHD", MediaType: "Movie"}
+	if s := movie.Season(); s != -1 {
+		t.Errorf("movie season = %d, want -1", s)
+	}
+}
+
+func TestDiscDBReleaseDiscsPerSeason(t *testing.T) {
+	discs := []DiscDBMatch{
+		// Complete series boxset: discs are numbered across all seasons.
+		episodeDisc(1, 1, "Complete", "1", "s1d1.mpls"),
+		episodeDisc(1, 2, "Complete", "1", "s1d2.mpls"),
+		episodeDisc(1, 4, "Complete", "2", "s2d2.mpls"),
+		episodeDisc(1, 3, "Complete", "2", "s2d1.mpls"),
+		// Single season release.
+		episodeDisc(2, 1, "Season 2 DVD", "2", "dvd1"),
+		episodeDisc(2, 2, "Season 2 DVD", "2", "dvd2"),
+	}
+
+	if got := discDBSeasons(discs); !slices.Equal(got, []int{1, 2}) {
+		t.Fatalf("seasons = %v", got)
+	}
+
+	groups := discDBReleaseDiscs(discs, 2)
+	if len(groups) != 2 || len(groups[0]) != 2 || len(groups[1]) != 2 {
+		t.Fatalf("unexpected groups %+v", groups)
+	}
+
+	second := discDBDiscCandidates(groups, 2)
+	if len(second) != 2 || second[0].Disc.Titles[0].SourceFile != "s2d2.mpls" || second[1].Disc.Titles[0].SourceFile != "dvd2" {
+		t.Errorf("disc 2 of season 2 = %+v", second)
+	}
+	if got := discDBDiscCandidates(groups, 3); len(got) != 0 {
+		t.Errorf("disc 3 should not exist, got %+v", got)
+	}
+}
+
+func TestRankDiscDBMatches(t *testing.T) {
+	titles := []TitleInfo{{Index: 0, SourceFile: "dvd2"}}
+	matches := []DiscDBMatch{
+		episodeDisc(1, 4, "Complete", "2", "s2d2.mpls"),
+		episodeDisc(2, 2, "Season 2 DVD", "2", "dvd2"),
+	}
+	scores := rankDiscDBMatches(titles, matches)
+	if !slices.Equal(scores, []int{1, 0}) || matches[0].ReleaseTitle != "Season 2 DVD" {
+		t.Errorf("scores = %v, first = %q", scores, matches[0].ReleaseTitle)
+	}
+}
+
+// fakeDiscDBServer answers the three queries of the manual search.
+func fakeDiscDBServer(t *testing.T) *httptest.Server {
+	t.Helper()
+	disc := func(index int, season, src string) string {
+		return `{"index":` + strconv.Itoa(index) + `,"name":"","format":"Blu-ray","contentHash":"H` + src + `","titles":[
+			{"index":0,"sourceFile":"` + src + `","segmentMap":"","duration":"0:45:00","size":1,"item":{"title":"Ep ` + src + `","type":"Episode","season":"` + season + `","episode":"1"}}]}`
+	}
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		var req struct {
+			Query     string         `json:"query"`
+			Variables map[string]any `json:"variables"`
+		}
+		_ = json.Unmarshal(body, &req)
+		w.Header().Set("Content-Type", "application/json")
+
+		switch {
+		case strings.Contains(req.Query, "HandyMKVSearchMedia"):
+			_, _ = w.Write([]byte(`{"data":{
+				"mediaItems":{"nodes":[{"title":"Show","year":2001,"type":"Series"},{"title":"Show","year":2020,"type":"Series"}]},
+				"boxsets":{"nodes":[]}}}`))
+		case strings.Contains(req.Query, "HandyMKVMediaItemDiscs"):
+			if req.Variables["title"] != "Show" {
+				t.Errorf("title = %v", req.Variables["title"])
+			}
+			_, _ = w.Write([]byte(`{"data":{"mediaItems":{"nodes":[
+				{"title":"Show","year":2001,"type":"Series","releases":[
+					{"title":"Season 1","year":2002,"discs":[` + disc(1, "1", "a1") + `,` + disc(2, "1", "a2") + `]},
+					{"title":"Season 2","year":2003,"discs":[` + disc(1, "2", "b1") + `,` + disc(2, "2", "b2") + `]}]},
+				{"title":"Show","year":2020,"type":"Series","releases":[
+					{"title":"Season 1","year":2021,"discs":[` + disc(1, "1", "remake") + `]}]}
+			]}}}`))
+		case strings.Contains(req.Query, "HandyMKVDiscByHash"):
+			if req.Variables["hash"] == strings.Repeat("A", 32) {
+				_, _ = w.Write([]byte(`{"data":{"mediaItems":{"nodes":[{"title":"Show","year":2001,"type":"Series","releases":[
+					{"title":"Season 2","year":2003,"discs":[` + strings.Replace(disc(2, "2", "b2"), `"Hb2"`, `"`+strings.Repeat("A", 32)+`"`, 1) + `]}]}]},"boxsets":{"nodes":[]}}}`))
+			} else {
+				_, _ = w.Write([]byte(`{"data":{"mediaItems":{"nodes":[]},"boxsets":{"nodes":[]}}}`))
+			}
+		default:
+			t.Errorf("unexpected query %s", req.Query)
+		}
+	}))
+}
+
+func withInput(t *testing.T, input string) {
+	t.Helper()
+	old := stdinReader
+	stdinReader = bufio.NewReader(strings.NewReader(input))
+	t.Cleanup(func() { stdinReader = old })
+}
+
+func TestSearchDiscDBInteractiveThreeSteps(t *testing.T) {
+	srv := fakeDiscDBServer(t)
+	defer srv.Close()
+	c := NewDiscDBClient("", "")
+	c.Endpoint = srv.URL
+
+	// Series 1 of 2 (the 2001 one), an invalid season, season 2, disc 2.
+	withInput(t, "Show\n1\n7\n2\n2\n")
+	m := searchDiscDBInteractive(c, []TitleInfo{{Index: 0, SourceFile: "b2"}})
+	if m == nil || m.MediaYear != 2001 || m.Season() != 2 || m.Disc.Titles[0].SourceFile != "b2" {
+		t.Fatalf("unexpected match %+v", m)
+	}
+
+	// Going back from the season step to the search, then skipping.
+	withInput(t, "Show\n1\n\n\n")
+	if m := searchDiscDBInteractive(c, nil); m != nil {
+		t.Errorf("expected no match, got %+v", m)
+	}
+
+	// The remake has one season with one disc: no season or disc prompt.
+	withInput(t, "Show\n2\n")
+	m = searchDiscDBInteractive(c, nil)
+	if m == nil || m.MediaYear != 2020 || m.Disc.Titles[0].SourceFile != "remake" {
+		t.Fatalf("unexpected match %+v", m)
+	}
+}
+
+func TestSearchDiscDBInteractiveByDiscID(t *testing.T) {
+	srv := fakeDiscDBServer(t)
+	defer srv.Close()
+	c := NewDiscDBClient("", "")
+	c.Endpoint = srv.URL
+
+	// An unknown ID, then a known one in lower case.
+	withInput(t, strings.Repeat("b", 32)+"\n"+strings.Repeat("a", 32)+"\n")
+	m := searchDiscDBInteractive(c, nil)
+	if m == nil || m.Disc.Titles[0].SourceFile != "b2" {
+		t.Fatalf("unexpected match %+v", m)
 	}
 }
