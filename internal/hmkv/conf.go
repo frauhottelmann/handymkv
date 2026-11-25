@@ -42,6 +42,9 @@ type handyMKVConfig struct {
 	AutoSelectTitles bool `json:"auto_select_titles,omitempty"`
 	// The TheDiscDB title types selected automatically. Empty means DefaultAutoSelectTypes.
 	AutoSelectTypes []string `json:"auto_select_types,omitempty"`
+	// Moves the encoded episodes into <handbrake_output_directory>/<Series>/S01, S02, ...
+	// (series and season from TheDiscDB). Movies and other titles are not moved.
+	SortSeriesEpisodes bool `json:"sort_series_episodes,omitempty"`
 }
 
 // EffectiveAutoSelectTypes returns the configured title types for the automatic selection, or
@@ -104,6 +107,7 @@ func (config *handyMKVConfig) String() string {
 	fmt.Fprintf(&sb, "TheDiscDB Title Lookup:             %t\n", !config.DisableDiscDB)
 	fmt.Fprintf(&sb, "Auto Select Titles (TheDiscDB):     %t\n", config.AutoSelectTitles)
 	fmt.Fprintf(&sb, "Auto Select Title Types:            %s\n", strings.Join(config.EffectiveAutoSelectTypes(), ", "))
+	fmt.Fprintf(&sb, "Sort Episodes Into Season Folders:  %t\n", config.SortSeriesEpisodes)
 
 	return sb.String()
 }
@@ -510,6 +514,13 @@ func promptForConfig(hb *HandBrakeCLI, configLocationSelection int) (*handyMKVCo
 		config.AutoSelectTypes = promptForDiscDBTitleTypes()
 		clear()
 	}
+
+	config.SortSeriesEpisodes = promptForBool(
+		"Sort encoded series episodes into series and season folders?",
+		"If enabled, episodes identified by TheDiscDB are moved after encoding to <HandBrake output directory>/<Series>/S01, S02 and so on. Movies and other titles stay in the folder of the run.",
+		false,
+	)
+	clear()
 
 	return &config, nil
 }
