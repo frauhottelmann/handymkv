@@ -152,7 +152,17 @@ const discDBTitleFields = `
 		item { title type season episode }
 	}`
 
-var discDBHashQuery = `query HandyMKVDiscByHash($hash: String) {
+var discDBHashQuery = discDBLookupQuery("HandyMKVDiscByHash", "contentHash")
+
+// discDBDiscIDQuery looks a disc up by its "Disc ID", the global disc ID that MakeMKV reports
+// (not the same as the content hash, which TheDiscDB shows as "Disc Hash").
+var discDBDiscIDQuery = discDBLookupQuery("HandyMKVDiscByID", "globalDiscId")
+
+func discDBLookupQuery(name, field string) string {
+	return strings.NewReplacer("HandyMKVDiscByHash", name, "contentHash: {", field+": {").Replace(discDBHashQueryTemplate)
+}
+
+var discDBHashQueryTemplate = `query HandyMKVDiscByHash($hash: String) {
   mediaItems(where: { releases: { some: { discs: { some: { contentHash: { eq: $hash } } } } } }) {
     nodes {
       title
@@ -351,6 +361,23 @@ func flattenDiscDBMatches(data *discDBQueryData, onlyHash string) []DiscDBMatch 
 
 // LookupByHash returns all discs in TheDiscDB with the given content hash. The same disc can be
 // part of several releases (e.g. a single season and a complete-series boxset).
+// LookupByDiscID returns all discs in TheDiscDB with the given disc ID (TheDiscDB's "Disc ID", the
+// global disc ID reported by MakeMKV).
+func (c *DiscDBClient) LookupByDiscID(ctx context.Context, id string) ([]DiscDBMatch, error) {
+	data, err := c.query(ctx, discDBDiscIDQuery, map[string]any{"hash": strings.ToUpper(id)})
+	if err != nil {
+		return nil, err
+	}
+
+	// The query only returns discs with this ID.
+	matches := flattenDiscDBMatches(data, "")
+	if len(matches) == 0 {
+		return nil, ErrDiscDBNoMatch
+	}
+
+	return matches, nil
+}
+
 func (c *DiscDBClient) LookupByHash(ctx context.Context, hash string) ([]DiscDBMatch, error) {
 	hash = strings.ToUpper(hash)
 	data, err := c.query(ctx, discDBHashQuery, map[string]any{"hash": hash})
@@ -1079,11 +1106,11 @@ func searchDiscDBInteractive(client *DiscDBClient, titles []TitleInfo) *DiscDBMa
 	}
 }
 
-// discDBHashPattern matches a TheDiscDB content hash (disc ID), e.g. "A1B2...".
+// discDBHashPattern matches a TheDiscDB disc ID or content hash (32 hex digits).
 var discDBHashPattern = regexp.MustCompile(`^[0-9A-Fa-f]{32}$`)
 
 // selectDiscDBMediaInteractive is step 1: search TheDiscDB and pick a movie, series or boxset.
-// If the user enters a disc ID (content hash) instead, the disc itself is returned. Both are nil
+// If the user enters a disc ID or disc hash instead, the disc itself is returned. Both are nil
 // if the user leaves the search empty.
 func selectDiscDBMediaInteractive(client *DiscDBClient) (*DiscDBMedia, *DiscDBMatch) {
 	for {
@@ -1094,16 +1121,12 @@ func selectDiscDBMediaInteractive(client *DiscDBClient) (*DiscDBMedia, *DiscDBMa
 		}
 
 		if discDBHashPattern.MatchString(term) {
-			ctx, cancel := context.WithTimeout(context.Background(), discDBRequestTimeout)
-			matches, err := client.LookupByHash(ctx, term)
-			cancel()
-
+			match, err := lookupDiscDBByID(client, term)
 			switch {
 			case err == nil:
-				// Same as the automatic lookup: movie/series releases come before boxsets.
-				return nil, &matches[0]
+				return nil, match
 			case errors.Is(err, ErrDiscDBNoMatch):
-				fmt.Printf("\nNo disc with ID %s found.\n\n", strings.ToUpper(term))
+				fmt.Printf("\nNo disc with ID or hash %s found.\n\n", strings.ToUpper(term))
 				continue
 			default:
 				fmt.Printf("\nTheDiscDB: %v\n\n", err)
@@ -1147,6 +1170,29 @@ func selectDiscDBMediaInteractive(client *DiscDBClient) (*DiscDBMedia, *DiscDBMa
 
 		return selected, nil
 	}
+}
+
+// lookupDiscDBByID looks up a disc entered by the user. TheDiscDB shows two identifiers per
+// disc, the "Disc ID" and the "Disc Hash" (content hash); both are 32 hex digits, so the disc ID
+// is tried first and the content hash second.
+func lookupDiscDBByID(client *DiscDBClient, id string) (*DiscDBMatch, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*discDBRequestTimeout)
+	defer cancel()
+
+	matches, idErr := client.LookupByDiscID(ctx, id)
+	if idErr == nil {
+		return &matches[0], nil
+	}
+
+	matches, err := client.LookupByHash(ctx, id)
+	if err == nil {
+		return &matches[0], nil
+	}
+	if errors.Is(err, ErrDiscDBNoMatch) && !errors.Is(idErr, ErrDiscDBNoMatch) {
+		// The hash is unknown and the disc ID lookup failed: report why.
+		return nil, idErr
+	}
+	return nil, err
 }
 
 // selectDiscDBSeasonAndDisc are steps 2 and 3: enter the season (skipped if the discs have at
