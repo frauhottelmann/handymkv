@@ -50,6 +50,11 @@ type TitleInfo struct {
 	DiscDBShortName string
 	// The index of the matched title in TheDiscDB. Only valid if DiscDBType is set.
 	discDBTitleIndex int
+	// The series name from TheDiscDB, set only for episodes with a known season. Used to sort
+	// the encoded episodes into series and season folders.
+	DiscDBSeries string
+	// The season of the episode from TheDiscDB. Only valid if DiscDBSeries is set.
+	DiscDBSeason int
 }
 
 // ProgressName is the name shown in the progress table.

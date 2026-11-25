@@ -670,6 +670,8 @@ func ApplyDiscDBMatch(titles []TitleInfo, match DiscDBMatch) int {
 		titles[i].DiscDBType = ""
 		titles[i].DiscDBFileName = ""
 		titles[i].DiscDBShortName = ""
+		titles[i].DiscDBSeries = ""
+		titles[i].DiscDBSeason = 0
 		titles[i].discDBTitleIndex = -1
 
 		dt := matchDiscDBTitle(&titles[i], match.Disc.Titles)
@@ -681,6 +683,19 @@ func ApplyDiscDBMatch(titles []TitleInfo, match DiscDBMatch) int {
 		titles[i].DiscDBType = dt.Item.Type
 		titles[i].discDBTitleIndex = dt.Index
 		titles[i].DiscDBShortName = discDBShortName(match, dt.Item)
+
+		if strings.EqualFold(dt.Item.Type, "Episode") {
+			if series := strings.TrimSpace(match.MediaTitle); series != "" {
+				season, err := strconv.Atoi(strings.TrimSpace(dt.Item.Season))
+				if err != nil || season < 0 {
+					season = match.Season()
+				}
+				if season >= 0 {
+					titles[i].DiscDBSeries = series
+					titles[i].DiscDBSeason = season
+				}
+			}
+		}
 
 		base := sanitizeFileName(discDBBaseName(match, dt.Item))
 		if base == "" {

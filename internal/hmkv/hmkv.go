@@ -143,6 +143,10 @@ func Exec(mkv *MakeMKV, hb *HandBrakeCLI, discIds []int, appVersion string, auto
 		return fmt.Errorf("an error occurred while creating the mkv output directory: %w", err)
 	}
 
+	// The configured HandBrake output directory, before the folder of this run is appended.
+	// Sorted episodes go to <hbBaseDirectory>/<Series>/S01.
+	hbBaseDirectory := config.HBOutputDirectory
+
 	config.HBOutputDirectory = filepath.Join(config.HBOutputDirectory, dirSlug)
 
 	err = os.MkdirAll(config.HBOutputDirectory, 0740)
@@ -332,6 +336,15 @@ func Exec(mkv *MakeMKV, hb *HandBrakeCLI, discIds []int, appVersion string, auto
 		automationEntries = RunAutomations(selectedAutomations, preRunParams, outputData)
 	}
 
+	// Sort the encoded episodes into series/season folders (after the automations, so they still
+	// find all encoded files in the folder of the run; before the manifest, so it records the
+	// final paths).
+	var sortedEpisodes []sortedEpisode
+	if config.SortSeriesEpisodes {
+		sortedEpisodes = sortSeriesEpisodes(hbBaseDirectory, config.HBOutputDirectory, processTitles, manifestEntries)
+		printSortedEpisodes(hbBaseDirectory, sortedEpisodes)
+	}
+
 	// Write run manifest (after automations so it can record automation data)
 	if !config.DisableManifests {
 		manifestDir := config.ManifestDirectory
@@ -365,7 +378,14 @@ func Exec(mkv *MakeMKV, hb *HandBrakeCLI, discIds []int, appVersion string, auto
 
 	if len(successfulTitles) > 0 {
 		// Tell the user where the encoded files are located
-		fmt.Printf("\nEncoded files are located in: %s\n\n", config.HBOutputDirectory)
+		if len(sortedEpisodes) == len(successfulTitles) {
+			fmt.Printf("\nEncoded episodes are located in: %s\n\n", hbBaseDirectory)
+		} else if len(sortedEpisodes) > 0 {
+			fmt.Printf("\nEncoded episodes are located in: %s\n", hbBaseDirectory)
+			fmt.Printf("Other encoded files are located in: %s\n\n", config.HBOutputDirectory)
+		} else {
+			fmt.Printf("\nEncoded files are located in: %s\n\n", config.HBOutputDirectory)
+		}
 	}
 
 	if len(ripFailures) > 0 {

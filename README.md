@@ -292,6 +292,20 @@ Available types (as used by TheDiscDB): `MainMovie`, `Episode`, `Extra`, `Traile
 
 The lookup can be turned off by setting `"disable_thediscdb": true` in `config.json`. If TheDiscDB ever requires an API key, it can be set with `"thediscdb_api_key": "<key>"`.
 
+### Sorting episodes into season folders
+
+With `"sort_series_episodes": true` in `config.json` (the configuration wizard asks for it), HandyMKV moves the encoded episodes out of the folder of the run into a folder per series and season inside the HandBrake output directory:
+
+```
+D:\Video\
+  Star Trek - The Next Generation\
+    S04\
+      Star_Trek_-_The_Next_Generation_-_S04E05_-_Remember_Me.mkv
+      Star_Trek_-_The_Next_Generation_-_S04E06_-_Legacy.mkv
+```
+
+Series name, season and episode come from TheDiscDB. Only titles TheDiscDB identifies as `Episode` are moved; movies, extras and unidentified titles stay in the `handymkv_<timestamp>` folder of the run, which is removed if it is empty afterwards. If the season of an episode is missing in TheDiscDB, the season of the disc is used. An existing file is never overwritten: the new one gets a ` (2)` suffix instead. The episodes are sorted after the automations have run, and the run history records the final paths.
+
 ## Extra HandBrake Arguments
 
 Some things cannot be expressed in a HandBrake preset. A preset can only select audio tracks by language and by "first" or "all", so it cannot pick individual tracks by index, and it applies a single audio rule to every track it selects. A disc that carries several tracks in the same language therefore cannot be handled by a preset alone.
