@@ -161,7 +161,8 @@ func Exec(mkv *MakeMKV, hb *HandBrakeCLI, discIds []int, appVersion string, auto
 	var selectedAutomations []Automation
 	var preRunParams map[string]string
 
-	for _, name := range automationNames {
+	// The automations from the configuration always run, the ones given with -a in addition.
+	for _, name := range mergeAutomationNames(config.Automations, automationNames) {
 		a, err := LoadAutomation(name)
 		if err != nil {
 			fmt.Printf("Warning: could not load automation '%s': %v\n", name, err)

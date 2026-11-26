@@ -50,6 +50,8 @@ type handyMKVConfig struct {
 	// Shuts down the computer after all titles were ripped and encoded, with a delay of
 	// ShutdownDelay to cancel it (same as the -shutdown flag).
 	ShutdownAfterRun bool `json:"shutdown_after_run,omitempty"`
+	// Automations that run after every run, in addition to the ones given with -a.
+	Automations []string `json:"automations,omitempty"`
 }
 
 // EffectiveAutoSelectTypes returns the configured title types for the automatic selection, or
@@ -115,6 +117,9 @@ func (config *handyMKVConfig) String() string {
 	fmt.Fprintf(&sb, "Sort Episodes Into Season Folders:  %t\n", config.SortSeriesEpisodes)
 	fmt.Fprintf(&sb, "Eject Disc After Run:               %t\n", config.EjectAfterRun)
 	fmt.Fprintf(&sb, "Shut Down Computer After Run:       %t\n", config.ShutdownAfterRun)
+	if len(config.Automations) > 0 {
+		fmt.Fprintf(&sb, "Automations Always Run:             %s\n", strings.Join(config.Automations, ", "))
+	}
 
 	return sb.String()
 }

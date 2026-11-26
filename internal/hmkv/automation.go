@@ -484,3 +484,26 @@ func RunAutomations(automations []Automation, preRunParams map[string]string, ou
 	fmt.Println()
 	return entries
 }
+
+// mergeAutomationNames returns the automations configured to always run followed by the ones
+// given for this run, trimmed and without empty names or duplicates.
+func mergeAutomationNames(configured, requested []string) []string {
+	seen := make(map[string]struct{})
+	var names []string
+
+	for _, list := range [][]string{configured, requested} {
+		for _, name := range list {
+			name = strings.TrimSpace(name)
+			if name == "" {
+				continue
+			}
+			if _, ok := seen[name]; ok {
+				continue
+			}
+			seen[name] = struct{}{}
+			names = append(names, name)
+		}
+	}
+
+	return names
+}

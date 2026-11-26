@@ -429,6 +429,16 @@ Use the `-a` flag to specify automations by name: `handymkv -a move-to-plex,noti
 
 Automations run after encoding completes. If the same name is provided more than once, it will only run once.
 
+Automations that should run after every run can be listed in `config.json`:
+
+```json
+{
+  "automations": ["move-to-plex", "notify-discord"]
+}
+```
+
+They run first, followed by the ones given with `-a`. A name that appears in both runs only once.
+
 ### Parameter Sources
 
 When creating an automation, each parameter has a **source** that determines how its value is obtained:

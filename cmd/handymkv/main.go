@@ -201,7 +201,7 @@ func main() {
 	flag.BoolVar(&autoSelect, "auto", false, "Auto select. Rips the titles that TheDiscDB identifies as one of the configured types (auto_select_types, default: MainMovie and Episode) without asking. Falls back to the manual selection if the disc is not in TheDiscDB. Overrides auto_select_titles in the config; use -auto=false to ask anyway.")
 	flag.BoolVar(&eject, "eject", false, "Eject. Ejects the discs after all titles were ripped and encoded successfully. Overrides eject_after_run in the config; use -eject=false to keep the discs in.")
 	flag.BoolVar(&shutdown, "shutdown", false, "Shutdown. Shuts down the computer 60 seconds after all titles were ripped and encoded successfully (cancel on Windows with 'shutdown /a'). Overrides shutdown_after_run in the config; use -shutdown=false to keep it running.")
-	flag.StringVar(&automationNames, "a", "", "Automations. A comma delimited list of automation names to run after encoding. Example: -a move-to-plex,notify-discord")
+	flag.StringVar(&automationNames, "a", "", "Automations. A comma delimited list of automation names to run after encoding, in addition to the automations in the config. Example: -a move-to-plex,notify-discord")
 
 	flag.Usage = func() {
 		fmt.Fprintf(flag.CommandLine.Output(), "Usage of %s:\n", os.Args[0])

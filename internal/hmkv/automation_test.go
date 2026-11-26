@@ -2,6 +2,7 @@ package hmkv
 
 import (
 	"fmt"
+	"slices"
 	"testing"
 	"time"
 )
@@ -79,4 +80,16 @@ func TestBuildRunOutputData(t *testing.T) {
 			t.Errorf("raw_files_deleted = %q, want %q", data["raw_files_deleted"], "false")
 		}
 	})
+}
+
+func TestMergeAutomationNames(t *testing.T) {
+	got := mergeAutomationNames([]string{"move-to-plex", " notify ", ""}, []string{"notify", "backup", "move-to-plex"})
+	want := []string{"move-to-plex", "notify", "backup"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("mergeAutomationNames = %v, want %v", got, want)
+	}
+
+	if got := mergeAutomationNames(nil, nil); len(got) != 0 {
+		t.Fatalf("expected no automations, got %v", got)
+	}
 }
