@@ -89,6 +89,13 @@ Usage of handymkv:
         auto_select_titles in the config; use -auto=false to ask anyway.
   -d string
         Discs. A comma delimited list of disc indexes to rip. Example: -d 0,1,2 (default "0")
+  -eject
+        Eject. Ejects the discs after all titles were ripped and encoded successfully.
+        Overrides eject_after_run in the config; use -eject=false to keep the discs in.
+  -shutdown
+        Shutdown. Shuts down the computer 60 seconds after all titles were ripped and
+        encoded successfully (cancel on Windows with 'shutdown /a'). Overrides
+        shutdown_after_run in the config; use -shutdown=false to keep it running.
   -v    Version. Prints the version of the application.
 
 Subcommands:
@@ -305,6 +312,35 @@ D:\Video\
 ```
 
 Series name, season and episode come from TheDiscDB. Only titles TheDiscDB identifies as `Episode` are moved; movies, extras and unidentified titles stay in the `handymkv_<timestamp>` folder of the run, which is removed if it is empty afterwards. If the season of an episode is missing in TheDiscDB, the season of the disc is used. An existing file is never overwritten: the new one gets a ` (2)` suffix instead. The episodes are sorted after the automations have run, and the run history records the final paths.
+
+### Ejecting the disc and shutting down
+
+HandyMKV can eject the discs and shut down the computer once a run is finished, e.g. to rip a disc overnight:
+
+```shell
+handymkv -auto -eject -shutdown
+```
+
+Or permanently in `config.json` (the configuration wizard asks for both):
+
+```json
+{
+  "eject_after_run": true,
+  "shutdown_after_run": true
+}
+```
+
+Both only happen if every selected title was ripped and encoded successfully; after an error the disc stays in the drive and the computer keeps running. They run at the very end, after the automations, the sorting of the episodes and the deletion of the raw files. `-eject=false` and `-shutdown=false` turn an option off for a single run.
+
+The shutdown is delayed by 60 seconds so it can still be cancelled:
+
+| System  | Shutdown                | Cancel         | Eject                       |
+|---------|-------------------------|----------------|-----------------------------|
+| Windows | `shutdown /s /t 60`     | `shutdown /a`  | built in (no tool needed)   |
+| Linux   | `shutdown -h +1`        | `shutdown -c`  | `eject /dev/sr0`            |
+| macOS   | after 60 s, via System Events | Ctrl+C during the countdown | `diskutil eject /dev/diskN` |
+
+On Linux, `shutdown` may require root rights depending on the distribution. If ejecting or shutting down fails, HandyMKV prints a warning; the run itself still counts as successful.
 
 ## Extra HandBrake Arguments
 

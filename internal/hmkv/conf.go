@@ -45,6 +45,11 @@ type handyMKVConfig struct {
 	// Moves the encoded episodes into <handbrake_output_directory>/<Series>/S01, S02, ...
 	// (series and season from TheDiscDB). Movies and other titles are not moved.
 	SortSeriesEpisodes bool `json:"sort_series_episodes,omitempty"`
+	// Ejects the discs after all titles were ripped and encoded (same as the -eject flag).
+	EjectAfterRun bool `json:"eject_after_run,omitempty"`
+	// Shuts down the computer after all titles were ripped and encoded, with a delay of
+	// ShutdownDelay to cancel it (same as the -shutdown flag).
+	ShutdownAfterRun bool `json:"shutdown_after_run,omitempty"`
 }
 
 // EffectiveAutoSelectTypes returns the configured title types for the automatic selection, or
@@ -108,6 +113,8 @@ func (config *handyMKVConfig) String() string {
 	fmt.Fprintf(&sb, "Auto Select Titles (TheDiscDB):     %t\n", config.AutoSelectTitles)
 	fmt.Fprintf(&sb, "Auto Select Title Types:            %s\n", strings.Join(config.EffectiveAutoSelectTypes(), ", "))
 	fmt.Fprintf(&sb, "Sort Episodes Into Season Folders:  %t\n", config.SortSeriesEpisodes)
+	fmt.Fprintf(&sb, "Eject Disc After Run:               %t\n", config.EjectAfterRun)
+	fmt.Fprintf(&sb, "Shut Down Computer After Run:       %t\n", config.ShutdownAfterRun)
 
 	return sb.String()
 }
@@ -518,6 +525,20 @@ func promptForConfig(hb *HandBrakeCLI, configLocationSelection int) (*handyMKVCo
 	config.SortSeriesEpisodes = promptForBool(
 		"Sort encoded series episodes into series and season folders?",
 		"If enabled, episodes identified by TheDiscDB are moved after encoding to <HandBrake output directory>/<Series>/S01, S02 and so on. Movies and other titles stay in the folder of the run.",
+		false,
+	)
+	clear()
+
+	config.EjectAfterRun = promptForBool(
+		"Eject the disc after ripping and encoding?",
+		"If enabled, the discs are ejected once all titles were ripped and encoded successfully. This can be overridden per run with -eject or -eject=false.",
+		false,
+	)
+	clear()
+
+	config.ShutdownAfterRun = promptForBool(
+		"Shut down the computer after ripping and encoding?",
+		"If enabled, the computer shuts down 60 seconds after all titles were ripped and encoded successfully (cancel on Windows with 'shutdown /a', on Linux with 'shutdown -c', on macOS with Ctrl+C). This can be overridden per run with -shutdown or -shutdown=false.",
 		false,
 	)
 	clear()

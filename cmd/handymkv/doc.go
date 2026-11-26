@@ -14,6 +14,9 @@ The main package is responsible for parsing command line arguments and prerequis
   -a string  Comma-delimited list of automation names to run after encoding.
   -auto      Select the titles of the configured TheDiscDB types (default: main movie, episodes)
              automatically. Overrides auto_select_titles in the config (-auto=false).
+  -eject     Eject the discs after a successful run. Overrides eject_after_run (-eject=false).
+  -shutdown  Shut down the computer 60 seconds after a successful run. Overrides
+             shutdown_after_run (-shutdown=false).
 
 ## Subcommands
 
