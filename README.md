@@ -437,7 +437,7 @@ Automations that should run after every run can be listed in `config.json`:
 }
 ```
 
-They run first, followed by the ones given with `-a`. A name that appears in both runs only once.
+They run first, followed by the ones given with `-a`. A name that appears in both runs only once. `handymkv automations create` asks whether the new automation should always run and adds it to this list; `handymkv automations delete` removes it from the list again.
 
 ### Parameter Sources
 

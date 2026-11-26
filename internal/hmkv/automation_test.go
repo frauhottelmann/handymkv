@@ -1,7 +1,10 @@
 package hmkv
 
 import (
+	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"slices"
 	"testing"
 	"time"
@@ -91,5 +94,55 @@ func TestMergeAutomationNames(t *testing.T) {
 
 	if got := mergeAutomationNames(nil, nil); len(got) != 0 {
 		t.Fatalf("expected no automations, got %v", got)
+	}
+}
+
+func TestSetAlwaysRunAutomation(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	initial := `{"mkv_output_directory": "D:\\MKV", "encoding_params": {"handbrake_preset": "Fast 1080p30"}, "custom": 1}`
+	if err := os.WriteFile(path, []byte(initial), 0640); err != nil {
+		t.Fatal(err)
+	}
+
+	read := func() map[string]any {
+		t.Helper()
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var m map[string]any
+		if err := json.Unmarshal(data, &m); err != nil {
+			t.Fatal(err)
+		}
+		return m
+	}
+
+	for _, name := range []string{"move-to-plex", "notify", "move-to-plex"} {
+		if _, err := setAlwaysRunAutomation(path, name, true); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	m := read()
+	if fmt.Sprint(m["automations"]) != "[move-to-plex notify]" {
+		t.Fatalf("automations = %v", m["automations"])
+	}
+	if m["mkv_output_directory"] != `D:\MKV` || m["custom"] != float64(1) || m["encoding_params"] == nil {
+		t.Fatalf("other settings were changed: %v", m)
+	}
+
+	changed, err := setAlwaysRunAutomation(path, "unknown", false)
+	if err != nil || changed {
+		t.Fatalf("removing an unlisted automation: changed=%t, err=%v", changed, err)
+	}
+
+	for _, name := range []string{"move-to-plex", "notify"} {
+		if _, err := setAlwaysRunAutomation(path, name, false); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if _, ok := read()["automations"]; ok {
+		t.Fatal("an empty automations list should be removed")
 	}
 }
