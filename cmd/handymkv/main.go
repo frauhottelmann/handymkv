@@ -193,11 +193,15 @@ func main() {
 	var automationNames string
 	var version bool
 	var autoSelect bool
+	var eject bool
+	var shutdown bool
 
 	flag.BoolVar(&version, "v", false, "Version. Prints the version of the application.")
 	flag.StringVar(&discIds, "d", "0", "Discs. A comma delimited list of disc indexes to rip. Example: -d 0,1,2")
 	flag.BoolVar(&autoSelect, "auto", false, "Auto select. Rips the titles that TheDiscDB identifies as one of the configured types (auto_select_types, default: MainMovie and Episode) without asking. Falls back to the manual selection if the disc is not in TheDiscDB. Overrides auto_select_titles in the config; use -auto=false to ask anyway.")
-	flag.StringVar(&automationNames, "a", "", "Automations. A comma delimited list of automation names to run after encoding. Example: -a move-to-plex,notify-discord")
+	flag.BoolVar(&eject, "eject", false, "Eject. Ejects the discs after all titles were ripped and encoded successfully. Overrides eject_after_run in the config; use -eject=false to keep the discs in.")
+	flag.BoolVar(&shutdown, "shutdown", false, "Shutdown. Shuts down the computer 60 seconds after all titles were ripped and encoded successfully (cancel on Windows with 'shutdown /a'). Overrides shutdown_after_run in the config; use -shutdown=false to keep it running.")
+	flag.StringVar(&automationNames, "a", "", "Automations. A comma delimited list of automation names to run after encoding, in addition to the automations in the config. Example: -a move-to-plex,notify-discord")
 
 	flag.Usage = func() {
 		fmt.Fprintf(flag.CommandLine.Output(), "Usage of %s:\n", os.Args[0])
@@ -273,15 +277,20 @@ func main() {
 		}
 	}
 
-	// Only pass -auto on if it was given, so that auto_select_titles in the config applies otherwise.
-	var autoSelectOverride *bool
+	// Only pass the flags on if they were given, so that the config applies otherwise.
+	var overrides hmkv.RunOverrides
 	flag.Visit(func(f *flag.Flag) {
-		if f.Name == "auto" {
-			autoSelectOverride = &autoSelect
+		switch f.Name {
+		case "auto":
+			overrides.AutoSelect = &autoSelect
+		case "eject":
+			overrides.Eject = &eject
+		case "shutdown":
+			overrides.Shutdown = &shutdown
 		}
 	})
 
-	err = hmkv.Exec(mkv, hb, discIdInts, getVersion(), autoNames, autoSelectOverride)
+	err = hmkv.Exec(mkv, hb, discIdInts, getVersion(), autoNames, overrides)
 	if err != nil {
 		if err == hmkv.ErrConfigNotFound {
 			fmt.Printf("Config file not found. Please run the configuration wizard with 'handymkv -c'.\n\n")

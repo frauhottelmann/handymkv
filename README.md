@@ -89,6 +89,13 @@ Usage of handymkv:
         auto_select_titles in the config; use -auto=false to ask anyway.
   -d string
         Discs. A comma delimited list of disc indexes to rip. Example: -d 0,1,2 (default "0")
+  -eject
+        Eject. Ejects the discs after all titles were ripped and encoded successfully.
+        Overrides eject_after_run in the config; use -eject=false to keep the discs in.
+  -shutdown
+        Shutdown. Shuts down the computer 60 seconds after all titles were ripped and
+        encoded successfully (cancel on Windows with 'shutdown /a'). Overrides
+        shutdown_after_run in the config; use -shutdown=false to keep it running.
   -v    Version. Prints the version of the application.
 
 Subcommands:
@@ -306,6 +313,35 @@ D:\Video\
 
 Series name, season and episode come from TheDiscDB. Only titles TheDiscDB identifies as `Episode` are moved; movies, extras and unidentified titles stay in the `handymkv_<timestamp>` folder of the run, which is removed if it is empty afterwards. If the season of an episode is missing in TheDiscDB, the season of the disc is used. An existing file is never overwritten: the new one gets a ` (2)` suffix instead. The episodes are sorted after the automations have run, and the run history records the final paths.
 
+### Ejecting the disc and shutting down
+
+HandyMKV can eject the discs and shut down the computer once a run is finished, e.g. to rip a disc overnight:
+
+```shell
+handymkv -auto -eject -shutdown
+```
+
+Or permanently in `config.json` (the configuration wizard asks for both):
+
+```json
+{
+  "eject_after_run": true,
+  "shutdown_after_run": true
+}
+```
+
+Both only happen if every selected title was ripped and encoded successfully; after an error the disc stays in the drive and the computer keeps running. They run at the very end, after the automations, the sorting of the episodes and the deletion of the raw files. `-eject=false` and `-shutdown=false` turn an option off for a single run.
+
+The shutdown is delayed by 60 seconds so it can still be cancelled:
+
+| System  | Shutdown                | Cancel         | Eject                       |
+|---------|-------------------------|----------------|-----------------------------|
+| Windows | `shutdown /s /t 60`     | `shutdown /a`  | built in (no tool needed)   |
+| Linux   | `shutdown -h +1`        | `shutdown -c`  | `eject /dev/sr0`            |
+| macOS   | after 60 s, via System Events | Ctrl+C during the countdown | `diskutil eject /dev/diskN` |
+
+On Linux, `shutdown` may require root rights depending on the distribution. If ejecting or shutting down fails, HandyMKV prints a warning; the run itself still counts as successful.
+
 ## Extra HandBrake Arguments
 
 Some things cannot be expressed in a HandBrake preset. A preset can only select audio tracks by language and by "first" or "all", so it cannot pick individual tracks by index, and it applies a single audio rule to every track it selects. A disc that carries several tracks in the same language therefore cannot be handled by a preset alone.
@@ -392,6 +428,16 @@ Automation files are stored as JSON in:
 Use the `-a` flag to specify automations by name: `handymkv -a move-to-plex,notify-discord`
 
 Automations run after encoding completes. If the same name is provided more than once, it will only run once.
+
+Automations that should run after every run can be listed in `config.json`:
+
+```json
+{
+  "automations": ["move-to-plex", "notify-discord"]
+}
+```
+
+They run first, followed by the ones given with `-a`. A name that appears in both runs only once. `handymkv automations create` asks whether the new automation should always run and adds it to this list; `handymkv automations delete` removes it from the list again.
 
 ### Parameter Sources
 

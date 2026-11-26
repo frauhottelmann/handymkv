@@ -19,9 +19,12 @@ import (
 //
 // If the automatic selection is enabled, the titles that TheDiscDB identifies as one of the
 // configured types (default: main movie and episodes) are selected without asking. If TheDiscDB
-// does not know the disc (or is disabled), the user is asked as usual. autoSelectOverride (the
-// -auto flag) takes precedence over auto_select_titles in the configuration; nil means not set.
-func Exec(mkv *MakeMKV, hb *HandBrakeCLI, discIds []int, appVersion string, automationNames []string, autoSelectOverride *bool) error {
+// does not know the disc (or is disabled), the user is asked as usual. The overrides (the -auto,
+// -eject and -shutdown flags) take precedence over the configuration; nil means not set.
+//
+// If all titles were ripped and encoded, the discs are ejected and/or the computer is shut down
+// afterwards, as configured (eject_after_run, shutdown_after_run).
+func Exec(mkv *MakeMKV, hb *HandBrakeCLI, discIds []int, appVersion string, automationNames []string, overrides RunOverrides) error {
 	config, err := ReadConfig()
 
 	if err != nil {
@@ -47,10 +50,7 @@ func Exec(mkv *MakeMKV, hb *HandBrakeCLI, discIds []int, appVersion string, auto
 
 	processTitles := make([]TitleInfo, 0)
 
-	autoSelect := config.AutoSelectTitles
-	if autoSelectOverride != nil {
-		autoSelect = *autoSelectOverride
-	}
+	autoSelect := resolveBool(config.AutoSelectTitles, overrides.AutoSelect)
 
 	var discDB *DiscDBClient
 
@@ -161,7 +161,8 @@ func Exec(mkv *MakeMKV, hb *HandBrakeCLI, discIds []int, appVersion string, auto
 	var selectedAutomations []Automation
 	var preRunParams map[string]string
 
-	for _, name := range automationNames {
+	// The automations from the configuration always run, the ones given with -a in addition.
+	for _, name := range mergeAutomationNames(config.Automations, automationNames) {
 		a, err := LoadAutomation(name)
 		if err != nil {
 			fmt.Printf("Warning: could not load automation '%s': %v\n", name, err)
@@ -389,7 +390,18 @@ func Exec(mkv *MakeMKV, hb *HandBrakeCLI, discIds []int, appVersion string, auto
 	}
 
 	if len(ripFailures) > 0 {
+		if resolveBool(config.EjectAfterRun, overrides.Eject) || resolveBool(config.ShutdownAfterRun, overrides.Shutdown) {
+			fmt.Printf("The disc was not ejected and the computer is not shut down because some titles could not be ripped.\n\n")
+		}
 		return fmt.Errorf("%d of %d title(s) could not be ripped", len(ripFailures), len(processTitles))
+	}
+
+	// Eject the discs / shut down only if every title was ripped and encoded.
+	if runSucceeded(len(processTitles), len(ripFailures), len(manifestEntries)) {
+		runPostRunActions(
+			resolveBool(config.EjectAfterRun, overrides.Eject),
+			resolveBool(config.ShutdownAfterRun, overrides.Shutdown),
+			processTitles)
 	}
 
 	return nil

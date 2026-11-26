@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"time"
 )
@@ -185,6 +186,15 @@ func DeleteAutomation(name string) error {
 	}
 
 	fmt.Printf("Automation '%s' deleted.\n\n", name)
+
+	if configPath, err := GetConfigFilePath(); err == nil {
+		if changed, err := setAlwaysRunAutomation(configPath, name, false); err != nil {
+			fmt.Printf("Warning: could not remove '%s' from the automations in %s: %v\n\n", name, configPath, err)
+		} else if changed {
+			fmt.Printf("Removed '%s' from the automations that always run (%s).\n\n", name, configPath)
+		}
+	}
+
 	return nil
 }
 
@@ -347,13 +357,92 @@ func CreateAutomation() error {
 		Params:  params,
 	}
 
+	alwaysRun := promptForBool(
+		"Run this automation after every run?",
+		"If enabled, the automation is added to \"automations\" in config.json and runs after every run without -a.",
+		false,
+	)
+
 	if err := SaveAutomation(a); err != nil {
 		return fmt.Errorf("could not save automation: %w", err)
 	}
 
 	dir, _ := getAutomationsDir()
 	fmt.Printf("Automation '%s' saved to %s\n\n", a.Name, filepath.Join(dir, a.Name+".json"))
+
+	if alwaysRun {
+		configPath, err := GetConfigFilePath()
+		if err != nil {
+			fmt.Printf("Warning: no config file found, so '%s' could not be set to always run. Run 'handymkv config setup' first and add it to \"automations\" in config.json.\n\n", a.Name)
+			return nil
+		}
+
+		if _, err := setAlwaysRunAutomation(configPath, a.Name, true); err != nil {
+			fmt.Printf("Warning: could not add '%s' to the automations in %s: %v\n\n", a.Name, configPath, err)
+			return nil
+		}
+
+		fmt.Printf("Automation '%s' runs after every run (%s).\n\n", a.Name, configPath)
+	}
+
 	return nil
+}
+
+// setAlwaysRunAutomation adds the automation to (enabled) or removes it from the "automations"
+// list of the config file. All other settings are kept as they are. It reports whether the file
+// was changed.
+func setAlwaysRunAutomation(configPath, name string, enabled bool) (bool, error) {
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		return false, err
+	}
+
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return false, fmt.Errorf("could not parse the config file: %w", err)
+	}
+	if raw == nil {
+		raw = make(map[string]json.RawMessage)
+	}
+
+	var names []string
+	if existing, ok := raw["automations"]; ok {
+		if err := json.Unmarshal(existing, &names); err != nil {
+			return false, fmt.Errorf("\"automations\" is not a list of names: %w", err)
+		}
+	}
+
+	contains := slices.Contains(names, name)
+
+	switch {
+	case enabled && !contains:
+		names = append(names, name)
+	case !enabled && contains:
+		names = slices.DeleteFunc(names, func(n string) bool { return n == name })
+	default:
+		return false, nil
+	}
+
+	if len(names) == 0 {
+		delete(raw, "automations")
+	} else {
+		encoded, err := json.Marshal(names)
+		if err != nil {
+			return false, err
+		}
+		raw["automations"] = encoded
+	}
+
+	out, err := json.MarshalIndent(raw, "", "  ")
+	if err != nil {
+		return false, err
+	}
+
+	if err := os.WriteFile(configPath, out, 0640); err != nil {
+		return false, err
+	}
+
+	return true, nil
 }
 
 // resolvePreRunParams collects prompt/env/default param values before the run starts.
@@ -483,4 +572,27 @@ func RunAutomations(automations []Automation, preRunParams map[string]string, ou
 
 	fmt.Println()
 	return entries
+}
+
+// mergeAutomationNames returns the automations configured to always run followed by the ones
+// given for this run, trimmed and without empty names or duplicates.
+func mergeAutomationNames(configured, requested []string) []string {
+	seen := make(map[string]struct{})
+	var names []string
+
+	for _, list := range [][]string{configured, requested} {
+		for _, name := range list {
+			name = strings.TrimSpace(name)
+			if name == "" {
+				continue
+			}
+			if _, ok := seen[name]; ok {
+				continue
+			}
+			seen[name] = struct{}{}
+			names = append(names, name)
+		}
+	}
+
+	return names
 }
