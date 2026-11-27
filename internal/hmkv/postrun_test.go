@@ -69,8 +69,9 @@ func TestEjectCommand(t *testing.T) {
 }
 
 func TestShutdownCommand(t *testing.T) {
+	t.Setenv("SystemRoot", `C:\WINDOWS`)
 	cmd, cancel, err := shutdownCommand("windows")
-	if err != nil || !slices.Equal(cmd, []string{"shutdown", "/s", "/t", "60"}) || cancel != "shutdown /a" {
+	if err != nil || !slices.Equal(cmd, []string{`C:\WINDOWS\System32\shutdown.exe`, "/s", "/t", "60"}) || cancel != "shutdown /a" {
 		t.Fatalf("windows: %v, %q, %v", cmd, cancel, err)
 	}
 
@@ -127,12 +128,13 @@ func TestEjectDiscs(t *testing.T) {
 
 func TestShutdownComputer(t *testing.T) {
 	calls := stubPostRun(t)
+	t.Setenv("SystemRoot", `C:\Windows`)
 
 	shutdownComputer("windows")
 	shutdownComputer("darwin")
 
 	want := []string{
-		"shutdown /s /t 60",
+		`C:\Windows\System32\shutdown.exe /s /t 60`,
 		"sleep 1m0s",
 		`osascript -e tell application "System Events" to shut down`,
 	}
@@ -166,5 +168,17 @@ func TestPostRunConfigKeys(t *testing.T) {
 	}
 	if strings.Contains(string(out), "eject_after_run") || strings.Contains(string(out), "shutdown_after_run") {
 		t.Fatalf("disabled options should be omitted: %s", out)
+	}
+}
+
+func TestWindowsSystem32Tool(t *testing.T) {
+	t.Setenv("SystemRoot", `D:\Win\`)
+	if got := windowsSystem32Tool("shutdown.exe"); got != `D:\Win\System32\shutdown.exe` {
+		t.Fatalf("got %q", got)
+	}
+
+	t.Setenv("SystemRoot", "")
+	if got := windowsSystem32Tool("shutdown.exe"); got != `C:\Windows\System32\shutdown.exe` {
+		t.Fatalf("got %q", got)
 	}
 }
