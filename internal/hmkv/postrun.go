@@ -72,6 +72,17 @@ var ejectWindows = ejectWindowsDrive
 // sleep waits before the shutdown on macOS. It is a variable so that tests can replace it.
 var sleep = time.Sleep
 
+// windowsSystem32Tool returns the full path of a tool in the Windows System32 folder. The full
+// path is used so that a file of the same name in the current directory is never run instead
+// (Go refuses to run such a file: "cannot run executable found relative to current directory").
+func windowsSystem32Tool(name string) string {
+	root := os.Getenv("SystemRoot")
+	if root == "" {
+		root = `C:\Windows`
+	}
+	return strings.TrimRight(root, `\/`) + `\System32\` + name
+}
+
 // ejectCommand returns the command that ejects the disc in the given drive on Linux and macOS.
 // devicePath is the drive path reported by makemkvcon, e.g. "/dev/sr0" or "/dev/rdisk4".
 func ejectCommand(goos, devicePath string) ([]string, error) {
@@ -92,7 +103,7 @@ func ejectCommand(goos, devicePath string) ([]string, error) {
 func shutdownCommand(goos string) (cmd []string, cancel string, err error) {
 	switch goos {
 	case "windows":
-		return []string{"shutdown", "/s", "/t", fmt.Sprintf("%d", int(ShutdownDelay.Seconds()))}, "shutdown /a", nil
+		return []string{windowsSystem32Tool("shutdown.exe"), "/s", "/t", fmt.Sprintf("%d", int(ShutdownDelay.Seconds()))}, "shutdown /a", nil
 	case "linux":
 		return []string{"shutdown", "-h", fmt.Sprintf("+%d", int(ShutdownDelay.Minutes()))}, "shutdown -c", nil
 	case "darwin":
